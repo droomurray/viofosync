@@ -142,7 +142,16 @@ async def lifespan(app: FastAPI):
 
     app.state.retention_task = asyncio.create_task(_background_retention())
 
-    app.state.hub = Hub()
+    app.state.hub = Hub(settings_provider=provider)
+    # Compute initial sync_status so the very first WebSocket snapshot
+    # and the first MQTT publish carry the right value without waiting
+    # for the sync worker's first cycle.
+    from web.services.sync_status import compute_sync_status as _csss
+    try:
+        _state, _ = _csss(app.state.hub, None, provider.get())
+        app.state.hub.last_state["sync_status"] = _state
+    except Exception:
+        log.exception("initial sync_status compute failed")
     app.state.geocode = GeocodeService(app.state.db, provider)
     app.state.export_worker = ExportWorker(
         app.state.db, provider, app.state.hub.broadcast

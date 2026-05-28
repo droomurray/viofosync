@@ -50,6 +50,10 @@ class SettingsModel(BaseModel):
     # share (Synology shared folder, ZFS dataset quota, etc.) where the
     # OS-level "free space" doesn't reflect the actual constraint.
     RECORDINGS_QUOTA_GB: int = Field(default=0, ge=0, le=1_048_576)
+    # When sync sees disk usage >= this percentage, status flips to
+    # "error" with reason "disk N% full". Must be >= RETENTION_DISK_PCT
+    # so retention gets a chance to clean before we flag a critical state.
+    DISK_CRITICAL_PCT: int = Field(default=95, ge=0, le=100)
 
     WEB_HOST: str = "0.0.0.0"
     WEB_PORT: int = Field(default=8080, ge=1, le=65535)
@@ -131,6 +135,16 @@ class SettingsModel(BaseModel):
             raise ValueError("MQTT_HOST is required when MQTT_ENABLED is True")
         return self
 
+    @model_validator(mode="after")
+    def _validate_disk_critical(self):
+        # Allow 0 (disabled) regardless. Otherwise must be >= retention pct.
+        if self.DISK_CRITICAL_PCT != 0 and self.RETENTION_DISK_PCT > self.DISK_CRITICAL_PCT:
+            raise ValueError(
+                f"DISK_CRITICAL_PCT ({self.DISK_CRITICAL_PCT}) must be "
+                f">= RETENTION_DISK_PCT ({self.RETENTION_DISK_PCT})"
+            )
+        return self
+
 
 # Public taxonomy used by the API + UI.
 EDITABLE_KEYS = {
@@ -139,7 +153,7 @@ EDITABLE_KEYS = {
     "ENABLE_SCHEDULED_SYNC", "WEB_HOST", "WEB_PORT", "EXPORT_ENCODER",
     "NOMINATIM_EMAIL", "GEOCODE_ENABLED",
     "SYNC_RO_ONLY", "RETENTION_MAX_DAYS", "RETENTION_DISK_PCT",
-    "RETENTION_PROTECT_RO", "RECORDINGS_QUOTA_GB",
+    "RETENTION_PROTECT_RO", "RECORDINGS_QUOTA_GB", "DISK_CRITICAL_PCT",
     "DISTANCE_UNITS",
     "PIP_POSITION",
     "MQTT_ENABLED", "MQTT_HOST", "MQTT_PORT", "MQTT_USERNAME",

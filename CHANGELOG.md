@@ -9,6 +9,27 @@
   action buttons; idle traffic is zero thanks to per-topic change
   detection and coalescing. LWT keeps HA's view consistent with
   viofosync's actual state.
+- `sync_status` now reports `error` for sticky problems: missing
+  `ADDRESS` configuration, recordings path not writable, camera
+  authentication failure (HTTP 401/403), or disk usage at/above
+  `DISK_CRITICAL_PCT` (new setting, default 95%).
+- The HA `sync_status` sensor exposes a `reason` JSON attribute
+  populated when state is `error`. Surface it in Lovelace with
+  `state_attr('sensor.viofosync_sync_status', 'reason')`.
+- New `DISK_CRITICAL_PCT` setting (Snapshot field `disk_critical_pct`)
+  configures the disk-pressure threshold above which sync goes into
+  `error`. Must be `>= RETENTION_DISK_PCT`.
+
+### Changed
+- Unified `sync_status` to four states: `downloading`, `waiting`,
+  `paused`, `error`. Replaces the previous `stopped` / `paused` /
+  `downloading` / `idle` vocabulary on the Home Assistant
+  `sensor.viofosync_sync_status` entity, and replaces the separate
+  "Dashcam online / offline" badge in the web UI with a single status
+  badge. If you have HA automations matching the previous strings,
+  update them: `idle` and `stopped` map to `waiting` (or `paused`
+  when sync is fully stopped). Connection state is still reflected
+  via the existing `binary_sensor.viofosync_dashcam`.
 
 ## v2.1 — 2026-05-16
 

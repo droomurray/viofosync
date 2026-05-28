@@ -170,3 +170,42 @@ def test_pip_position_default_is_top_right() -> None:
         SettingsModel(PIP_POSITION=pos)
     with pytest.raises(ValidationError):
         SettingsModel(PIP_POSITION="middle")
+
+
+def test_disk_critical_pct_default_is_95():
+    from web.settings_schema import SettingsModel
+    m = SettingsModel()
+    assert m.DISK_CRITICAL_PCT == 95
+
+
+def test_disk_critical_pct_validates_range():
+    from web.settings_schema import SettingsModel
+    import pytest as _pt
+    with _pt.raises(Exception):
+        SettingsModel(DISK_CRITICAL_PCT=101)
+    with _pt.raises(Exception):
+        SettingsModel(DISK_CRITICAL_PCT=-1)
+    # Boundaries OK
+    assert SettingsModel(DISK_CRITICAL_PCT=0).DISK_CRITICAL_PCT == 0
+    assert SettingsModel(DISK_CRITICAL_PCT=100).DISK_CRITICAL_PCT == 100
+
+
+def test_disk_critical_pct_must_exceed_retention_threshold():
+    """A critical threshold below the retention threshold would fire before
+    retention even tried — reject the combination at validation time."""
+    from web.settings_schema import SettingsModel
+    import pytest as _pt
+    with _pt.raises(Exception):
+        SettingsModel(RETENTION_DISK_PCT=90, DISK_CRITICAL_PCT=80)
+    # Equal is allowed (no overlap means no firing before retention)
+    SettingsModel(RETENTION_DISK_PCT=90, DISK_CRITICAL_PCT=95)
+
+
+def test_snapshot_exposes_disk_critical_pct():
+    from web.settings import SettingsProvider
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        sp = SettingsProvider(config_path=f"{d}/c.json",
+                               env_file_path=f"{d}/v.env",
+                               recordings_dir=d)
+        assert sp.get().disk_critical_pct == 95

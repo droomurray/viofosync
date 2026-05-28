@@ -155,6 +155,20 @@ input[type="radio"] {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
+/* In "waiting" state we still show the sync icon, but static. The
+ * .active class drives the spin; .waiting suppresses it. */
+#sync-toggle.waiting #sync-icon-sync {
+  animation: none;
+}
+#sync-toggle.error #sync-icon-warning {
+  /* Subtle pulse on the warning icon so the user notices a fault state
+   * without it being too aggressive. */
+  animation: warn-pulse 2s ease-in-out infinite;
+}
+@keyframes warn-pulse {
+  0%, 100% { opacity: 0.9; }
+  50% { opacity: 0.6; }
+}
 .icon-btn.paused {
   color: var(--err-text);
   border-color: var(--err);
@@ -247,8 +261,17 @@ nav a.active { background: var(--panel-2); }
   border: 1px solid var(--border);
   font-size: 12px;
 }
-.status.offline { color: var(--err-text); border-color: var(--err); }
-.status.online { color: var(--ok); border-color: var(--ok); }
+/* Four-state sync status badge. Colors reuse the existing palette so
+ * dark/light themes stay coherent — extend the palette only if a
+ * future revision adds new accent tokens. */
+.status.downloading { color: var(--ok); border-color: var(--ok); }
+.status.waiting     { color: #f59e0b; border-color: #f59e0b; }
+.status.paused      { color: var(--err-text); border-color: var(--err); }
+.status.error {
+  color: #ffffff;
+  background: #7f1d1d;
+  border-color: #7f1d1d;
+}
 
 main {
   padding: 24px;
@@ -1374,8 +1397,10 @@ main {
     background: var(--muted);
     border: none;
   }
-  .status.offline { background: var(--err); }
-  .status.online { background: var(--ok); }
+  .status.downloading { background: var(--ok); }
+  .status.waiting     { background: #f59e0b; }
+  .status.paused      { background: var(--err); }
+  .status.error       { background: #7f1d1d; }
 
   .day-header h3 { font-size: 14px; }
   .day-header .meta { font-size: 11px; }
@@ -1460,6 +1485,10 @@ main {
   .icon-btn.paused {
     animation: none;
     box-shadow: 0 0 0 1px var(--err);
+  }
+  #sync-toggle.error #sync-icon-warning {
+    animation: none;
+    opacity: 0.9;
   }
   .clip-pair.flash { animation: none; }
   .exports-panel.just-submitted { animation: none; }

@@ -247,6 +247,12 @@ def disk_used_pct(recordings: str, quota_gb: int = 0) -> Optional[float]:
     ``_quota_exceeded`` to decide whether each rule is currently
     breached, so a quota set without a percentage threshold (or
     vice versa) triggers independently.
+
+    NOTE: For deciding whether the disk is critically full (the
+    ``compute_sync_status`` error trigger), prefer
+    :func:`filesystem_used_pct` — quota mode here reads ~100% when
+    retention is doing its job correctly, which would otherwise trip
+    a perpetual error.
     """
     if quota_gb > 0:
         used = _cached_used_bytes(recordings)
@@ -254,6 +260,17 @@ def disk_used_pct(recordings: str, quota_gb: int = 0) -> Optional[float]:
         if limit <= 0:
             return None
         return used / limit * 100.0
+    return filesystem_used_pct(recordings)
+
+
+def filesystem_used_pct(recordings: str) -> Optional[float]:
+    """Filesystem-level disk usage % for the volume holding *recordings*.
+    Ignores any configured quota — this is the "OS will start denying
+    writes soon" signal, separate from the self-imposed quota that
+    retention manages.
+
+    Returns ``None`` when the path is missing.
+    """
     try:
         du = shutil.disk_usage(recordings)
     except (OSError, FileNotFoundError):

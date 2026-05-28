@@ -16,6 +16,7 @@ def _stub_snapshot(**kwargs):
         recordings=".",
         enable_scheduled_sync=True,
         retention_max_days=0,
+        disk_critical_pct=95,
     )
     base.update(kwargs)
     return types.SimpleNamespace(**base)
@@ -76,82 +77,80 @@ def test_state_dashcam_unknown_when_no_address():
                          None, _stub_snapshot(address="")) == "OFF"
 
 
-def test_state_sync_status_stopped_when_missing():
+def test_state_sync_status_paused_when_no_sync_state():
     from web.services.mqtt_state import state_sync_status
-    # sync_state key absent → stopped
     hub = _hub_with_state({})
-    assert state_sync_status(hub, None, _stub_snapshot()) == "stopped"
+    assert state_sync_status(hub, None, _stub_snapshot()) == "paused"
 
 
-def test_state_sync_status_stopped_when_not_running():
+def test_state_sync_status_paused_when_not_running():
     from web.services.mqtt_state import state_sync_status
     hub = _hub_with_state({"sync_state": {"running": False, "paused": False}})
-    assert state_sync_status(hub, None, _stub_snapshot()) == "stopped"
+    assert state_sync_status(hub, None, _stub_snapshot()) == "paused"
 
 
-def test_state_sync_status_paused():
+def test_state_sync_status_paused_when_paused_flag():
     from web.services.mqtt_state import state_sync_status
     hub = _hub_with_state({"sync_state": {"running": True, "paused": True}})
     assert state_sync_status(hub, None, _stub_snapshot()) == "paused"
 
 
-def test_state_sync_status_downloading():
+def test_state_sync_status_downloading_when_current_item():
     from web.services.mqtt_state import state_sync_status
     hub = _hub_with_state({
         "sync_state": {"running": True, "paused": False},
-        "current_item": {"filename": "x.MP4"},
+        "dashcam_online": True,
+        "current_item": {"filename": "x.mp4"},
     })
     assert state_sync_status(hub, None, _stub_snapshot()) == "downloading"
 
 
-def test_state_sync_status_idle_when_queue_empty(tmp_path):
-    """No current item AND no pending/downloading rows → idle."""
+def test_state_sync_status_waiting_when_no_current_item():
     from web.services.mqtt_state import state_sync_status
-    db = _db_with_queue(tmp_path, [])
     hub = _hub_with_state({
         "sync_state": {"running": True, "paused": False},
+        "dashcam_online": True,
         "current_item": None,
     })
-    assert state_sync_status(hub, db, _stub_snapshot()) == "idle"
+    assert state_sync_status(hub, None, _stub_snapshot()) == "waiting"
 
 
-def test_state_sync_status_downloading_between_items(tmp_path):
-    """No current item but queue still has pending rows → downloading
-    (covers the gap between consecutive clips in a sync cycle)."""
+def test_state_sync_status_waiting_when_dashcam_offline():
     from web.services.mqtt_state import state_sync_status
-    db = _db_with_queue(tmp_path, [("next.MP4", "pending")])
     hub = _hub_with_state({
         "sync_state": {"running": True, "paused": False},
-        "current_item": None,
+        "dashcam_online": False,
     })
-    assert state_sync_status(hub, db, _stub_snapshot()) == "downloading"
+    assert state_sync_status(hub, None, _stub_snapshot()) == "waiting"
 
 
-def test_state_sync_status_downloading_while_row_marked_downloading(tmp_path):
-    """A row in state='downloading' also counts as work in progress
-    even if hub.last_state hasn't seen item_started yet."""
+def test_state_sync_status_error_when_address_unset():
     from web.services.mqtt_state import state_sync_status
-    db = _db_with_queue(tmp_path, [("x.MP4", "downloading")])
     hub = _hub_with_state({
         "sync_state": {"running": True, "paused": False},
-        "current_item": None,
+        "dashcam_online": True,
     })
-    assert state_sync_status(hub, db, _stub_snapshot()) == "downloading"
+    assert state_sync_status(
+        hub, None, _stub_snapshot(address=None),
+    ) == "error"
 
 
-def test_state_sync_status_idle_ignores_done_and_failed(tmp_path):
-    """Failed/done rows don't drag status back to downloading."""
-    from web.services.mqtt_state import state_sync_status
-    db = _db_with_queue(tmp_path, [
-        ("done.MP4", "done"),
-        ("fail.MP4", "failed"),
-        ("gone.MP4", "gone"),
-    ])
+def test_attrs_sync_status_carries_reason_when_error():
+    from web.services.mqtt_state import attrs_sync_status
+    hub = _hub_with_state({})
+    attrs = attrs_sync_status(hub, None, _stub_snapshot(address=None))
+    assert attrs == {"reason": "camera address not configured"}
+
+
+def test_attrs_sync_status_reason_none_when_not_error():
+    from web.services.mqtt_state import attrs_sync_status
     hub = _hub_with_state({
         "sync_state": {"running": True, "paused": False},
-        "current_item": None,
+        "dashcam_online": True,
+        "current_item": {"filename": "x.mp4"},
     })
-    assert state_sync_status(hub, db, _stub_snapshot()) == "idle"
+    attrs = attrs_sync_status(hub, None, _stub_snapshot())
+    assert attrs == {"reason": None}
 
 
 # ---- queue counts

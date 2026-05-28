@@ -56,6 +56,7 @@ class Snapshot:
     retention_disk_pct: int
     retention_protect_ro: bool
     recordings_quota_gb: int
+    disk_critical_pct: int
 
     password_hash: str
     session_secret: str
@@ -237,6 +238,7 @@ class SettingsProvider:
             retention_disk_pct=m.RETENTION_DISK_PCT,
             retention_protect_ro=m.RETENTION_PROTECT_RO,
             recordings_quota_gb=m.RECORDINGS_QUOTA_GB,
+            disk_critical_pct=m.DISK_CRITICAL_PCT,
             password_hash=m.WEB_PASSWORD_HASH,
             session_secret=m.SESSION_SECRET,
             host=m.WEB_HOST,

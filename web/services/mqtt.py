@@ -109,6 +109,28 @@ def entities_affected_by(hub_event_type: str):
             yield entity
 
 
+async def _publish_entity_attrs(client, cfg, entity, hub, db, snap,
+                                  *, maybe_publish):
+    """Publish the JSON attributes payload for an entity that defines
+    ``attrs_fn``. No-op when attrs_fn is None or returns None."""
+    if entity.attrs_fn is None:
+        return
+    try:
+        attrs = entity.attrs_fn(hub, db, snap)
+    except Exception:
+        log.exception("mqtt: attrs_fn raised for %s", entity.object_id)
+        return
+    if attrs is None:
+        return
+    from .mqtt_topology import build_attrs_topic
+    import json as _json
+    topic = build_attrs_topic(entity.object_id, cfg)
+    payload = _json.dumps(attrs).encode()
+    await maybe_publish(client, topic, payload,
+                        retain=True, qos=cfg["qos"],
+                        min_interval=entity.min_publish_interval_s)
+
+
 class ConnState(enum.Enum):
     IDLE = "idle"                # service not started or settings incomplete
     CONNECTING = "connecting"
@@ -309,6 +331,10 @@ class MqttService:
             await self._maybe_publish(client, topic, value.encode(),
                                        retain=True, qos=cfg["qos"],
                                        min_interval=entity.min_publish_interval_s)
+            await _publish_entity_attrs(
+                client, cfg, entity, self._hub, self._db, snap,
+                maybe_publish=self._maybe_publish,
+            )
 
     async def _maybe_publish(
         self, client, topic: str, payload: bytes,
@@ -388,6 +414,10 @@ class MqttService:
                         retain=True,
                         qos=cfg["qos"],
                         min_interval=entity.min_publish_interval_s,
+                    )
+                    await _publish_entity_attrs(
+                        client, cfg, entity, self._hub, self._db, snap,
+                        maybe_publish=self._maybe_publish,
                     )
         finally:
             # Restore original broadcast methods so subsequent test

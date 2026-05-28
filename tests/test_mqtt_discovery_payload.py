@@ -170,3 +170,44 @@ def test_discovery_payload_disabled_by_default():
     )
     payload = build_discovery_payload(entity, _cfg())
     assert payload["enabled_by_default"] is False
+
+
+def test_discovery_payload_includes_json_attributes_topic_when_attrs_fn():
+    from web.services.mqtt_topology import (
+        EntityDef, build_discovery_payload, build_attrs_topic,
+    )
+
+    def _stub_state(hub, db, snap): return "x"
+    def _stub_attrs(hub, db, snap): return {"reason": None}
+
+    ent = EntityDef(
+        object_id="demo", component="sensor", name="Demo",
+        icon=None, device_class=None, state_class=None,
+        unit_of_measurement=None, enabled_by_default=True,
+        min_publish_interval_s=0.0,
+        state_fn=_stub_state, command_handler=None,
+        attrs_fn=_stub_attrs,
+    )
+    cfg = {"node_id": "vfs", "discovery_prefix": "homeassistant",
+           "version": "0.0.0", "configuration_url": ""}
+    payload = build_discovery_payload(ent, cfg)
+    assert payload["json_attributes_topic"] == build_attrs_topic("demo", cfg)
+
+
+def test_discovery_payload_omits_json_attributes_topic_without_attrs_fn():
+    from web.services.mqtt_topology import (
+        EntityDef, build_discovery_payload,
+    )
+
+    def _stub_state(hub, db, snap): return "x"
+    ent = EntityDef(
+        object_id="demo2", component="sensor", name="Demo2",
+        icon=None, device_class=None, state_class=None,
+        unit_of_measurement=None, enabled_by_default=True,
+        min_publish_interval_s=0.0,
+        state_fn=_stub_state, command_handler=None,
+    )
+    cfg = {"node_id": "vfs", "discovery_prefix": "homeassistant",
+           "version": "0.0.0", "configuration_url": ""}
+    payload = build_discovery_payload(ent, cfg)
+    assert "json_attributes_topic" not in payload

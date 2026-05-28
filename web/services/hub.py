@@ -22,19 +22,33 @@ from typing import Any, Dict, Set
 from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect
 
+from .sync_status import compute_sync_status
+
 log = logging.getLogger("viofosync.hub")
 
 
 class Hub:
-    def __init__(self) -> None:
+    def __init__(self, settings_provider: Any = None) -> None:
         self._clients: Set[WebSocket] = set()
         self._lock = asyncio.Lock()
+        self._settings_provider = settings_provider
         # Retain the last snapshot of major state so a newly-
         # connected client sees the current situation without
         # waiting for the next event.
         self.last_state: Dict[str, Any] = {
             "dashcam_online": None,
             "current_item": None,
+            # Stateful diagnostics consumed by compute_sync_status():
+            "sync_error": None,
+            "disk_pct": None,
+            # Latest computed status + reason. Stored on the hub so
+            # the WebSocket snapshot (and any consumer reading
+            # last_state) sees a coherent pair without waiting for the
+            # next change event. ``sync_status_reason`` is the
+            # human-readable error reason — non-null only when status
+            # is "error".
+            "sync_status": None,
+            "sync_status_reason": None,
         }
 
     async def connect(self, ws: WebSocket) -> None:
@@ -91,8 +105,23 @@ class Hub:
                 "running": event.get("running"),
                 "paused": event.get("paused"),
             }
+        elif t == "sync_error":
+            # kind=None is the clear signal. Anything else replaces the
+            # current error verbatim — last writer wins.
+            kind = event.get("kind")
+            if kind is None:
+                self.last_state["sync_error"] = None
+            else:
+                self.last_state["sync_error"] = {
+                    "kind": kind,
+                    "message": event.get("message"),
+                }
+        elif t == "disk_pct":
+            pct = event.get("pct")
+            if isinstance(pct, (int, float)):
+                self.last_state["disk_pct"] = float(pct)
 
-        dead = []
+        dead: list = []
         async with self._lock:
             clients = list(self._clients)
         for ws in clients:
@@ -100,10 +129,45 @@ class Hub:
                 await ws.send_json(event)
             except Exception:
                 dead.append(ws)
+        # Recompute the unified status after the state mutation above.
+        await self._maybe_emit_sync_status(dead)
         if dead:
             async with self._lock:
                 for ws in dead:
                     self._clients.discard(ws)
+
+    async def _maybe_emit_sync_status(self, dead: list) -> None:
+        """After last_state mutations, recompute the unified status. If
+        it differs from the cached value, store it and broadcast a
+        follow-up event. Called from broadcast(); ``dead`` is the same
+        list it accumulates so we drop disconnected clients in one pass.
+        """
+        if self._settings_provider is None:
+            return
+        try:
+            snap = self._settings_provider.get()
+            status, reason = compute_sync_status(self, None, snap)
+        except Exception:
+            log.exception("sync_status compute failed; skipping follow-up")
+            return
+        prev_status = self.last_state.get("sync_status")
+        prev_reason = self.last_state.get("sync_status_reason")
+        # Dedupe on the (status, reason) pair so a changing reason
+        # (e.g. disk % climbing while status stays "error") still
+        # reaches clients. Non-error states have reason=None so this
+        # collapses back to status-only deduping there.
+        if status == prev_status and reason == prev_reason:
+            return
+        self.last_state["sync_status"] = status
+        self.last_state["sync_status_reason"] = reason
+        event = {"type": "sync_status", "status": status, "reason": reason}
+        async with self._lock:
+            clients = list(self._clients)
+        for ws in clients:
+            try:
+                await ws.send_json(event)
+            except Exception:
+                dead.append(ws)
 
     def schedule_broadcast(
         self,

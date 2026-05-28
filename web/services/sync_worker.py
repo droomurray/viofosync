@@ -36,6 +36,7 @@ import viofosync_lib as vfs
 from ..db import Database
 from ..settings import SettingsProvider
 from . import queue as q
+from . import retention as _retention
 from . import scanner
 from .hub import Hub
 
@@ -278,6 +279,10 @@ class SyncWorker:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._running_cycle = False
         self._current_filename: Optional[str] = None
+        # Tracks the kind of sync_error currently sticky on the hub, so
+        # we can emit clear signals only when a previously-set error
+        # actually changes.
+        self._last_error_kind: Optional[str] = None
 
     # ---- lifecycle ----
 
@@ -394,6 +399,71 @@ class SyncWorker:
                 )
             )
 
+    async def _emit_disk_pct(self) -> None:
+        """Broadcast the current filesystem disk usage % so the Hub
+        can evaluate the critical-disk error condition. Called from
+        ``_cycle`` on the event loop.
+
+        Uses :func:`retention.filesystem_used_pct` — NOT the
+        quota-aware ``disk_used_pct``. When ``RECORDINGS_QUOTA_GB``
+        is set, quota retention deliberately keeps the recordings dir
+        at ~100% of quota, so the quota-aware metric would trip
+        ``DISK_CRITICAL_PCT`` perpetually. The critical-disk error
+        is reserved for the filesystem-level "OS will deny writes
+        soon" condition, which is independent of our self-imposed
+        quota.
+        """
+        snap = self._provider.get()
+        pct = _retention.filesystem_used_pct(snap.recordings)
+        if pct is None:
+            return
+        await self.hub.broadcast({"type": "disk_pct", "pct": float(pct)})
+
+    async def _emit_sync_error(
+        self, kind: Optional[str], message: Optional[str]
+    ) -> None:
+        await self.hub.broadcast({
+            "type": "sync_error", "kind": kind, "message": message,
+        })
+
+    async def _set_sync_error(self, kind: str, message: str) -> None:
+        if self._last_error_kind == kind:
+            return  # already sticky on the hub; no event
+        self._last_error_kind = kind
+        await self._emit_sync_error(kind, message)
+
+    async def _clear_sync_error(self) -> None:
+        if self._last_error_kind is None:
+            return
+        self._last_error_kind = None
+        await self._emit_sync_error(None, None)
+
+    async def _check_recordings_writable(self) -> bool:
+        """Return True if the recordings root exists and is writable.
+        Emits a sticky sync_error on failure, clears one on recovery."""
+        snap = self._provider.get()
+        path = getattr(snap, "recordings", None) or ""
+        ok = bool(path) and os.path.isdir(path) and os.access(path, os.W_OK)
+        if not ok:
+            await self._set_sync_error(
+                "recordings_unwritable",
+                "recordings path not writable",
+            )
+            return False
+        if self._last_error_kind == "recordings_unwritable":
+            await self._clear_sync_error()
+        return True
+
+    async def _classify_listing_failure(self, exc: BaseException) -> None:
+        """Inspect a listing exception. If it's HTTP 401/403, emit a
+        sticky auth_failure error. Other exceptions are not promoted to
+        sticky errors — they're transient by nature."""
+        if isinstance(exc, urllib.error.HTTPError) and exc.code in (401, 403):
+            await self._set_sync_error(
+                "auth_failure",
+                "camera authentication failed",
+            )
+
     # ---- main loop ----
 
     async def _run(self) -> None:
@@ -465,6 +535,7 @@ class SyncWorker:
             )
         except Exception as e:
             log.warning("listing fetch failed: %s", e)
+            await self._classify_listing_failure(e)
             return False
         if self._provider.get().sync_ro_only:
             listing = list(_filter_ro_only(listing))
@@ -476,9 +547,14 @@ class SyncWorker:
             "queue": q.list_all(self.db, limit=200),
         })
         q.emit_queue_changed(self.db, self.hub)
+        if self._last_error_kind == "auth_failure":
+            await self._clear_sync_error()
         return True
 
     async def _cycle(self) -> bool:
+        await self._emit_disk_pct()
+        if not await self._check_recordings_writable():
+            return False
         reachable = await self._probe()
         await self.hub.broadcast({
             "type": "dashcam_online" if reachable else "dashcam_offline",
@@ -546,7 +622,6 @@ class SyncWorker:
                 await scanner.sweep_missing_thumbs(
                     self.db, snap.recordings,
                 )
-                from . import retention as _retention
                 sink = WebSink(self.hub, asyncio.get_running_loop())
                 await asyncio.to_thread(
                     _retention.sweep,
@@ -560,6 +635,7 @@ class SyncWorker:
             except Exception:  # pragma: no cover — non-fatal
                 log.exception("post-cycle scan/thumb sweep failed")
 
+        await self._emit_disk_pct()
         await self.hub.broadcast({
             "type": "sync_done",
             "ok": True,

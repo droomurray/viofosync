@@ -86,7 +86,10 @@ async function showApp() {
   openSocket();
   try {
     const s = await api("/api/sync/status");
-    updateSyncState(s.running, s.paused);
+    state.syncRunning = s.running;
+    state.syncPaused = s.paused;
+    // The WS snapshot will deliver the server-computed sync_status
+    // shortly; no direct updateSyncState call needed here.
   } catch {}
   try {
     const gs = await api("/api/archive/extract-gps/status");
@@ -161,21 +164,21 @@ document.getElementById("sync-toggle").addEventListener("click", async () => {
   } else {
     await api("/api/sync/resume", { method: "POST" });
   }
-  // Fetch fresh status — the WS event will follow shortly but
-  // a direct response avoids a visible lag on the button icon.
   const s = await api("/api/sync/status");
-  updateSyncState(s.running, s.paused);
+  state.syncRunning = s.running;
+  state.syncPaused = s.paused;
+  // The WS sync_status event will follow shortly; no direct call to
+  // updateSyncState here — the server-computed status is the truth.
 });
 
-function updateSyncState(running, paused) {
-  state.syncRunning = running;
-  state.syncPaused = paused;
-
+// state.syncStatus is one of: "downloading", "waiting", "paused", "error", null
+// state.syncStatusReason is a short human-readable string (only set in error)
+function updateSyncState(status) {
+  state.syncStatus = status;
+  // The toggle button's pause/resume behaviour still depends on
+  // syncRunning/syncPaused, which are derived from sync_state events
+  // (see handleEvent). Status is what drives the *visual* badge + icon.
   const btn = document.getElementById("sync-toggle");
-  // Use explicit setAttribute/removeAttribute on the SVG icons:
-  // some browsers don't propagate the `.hidden` IDL property
-  // setter onto SVGElement reliably, which has bitten us with
-  // the icon staying visible when JS said it should be hidden.
   const setVisible = (el, visible) => {
     if (visible) el.removeAttribute("hidden");
     else el.setAttribute("hidden", "");
@@ -183,26 +186,33 @@ function updateSyncState(running, paused) {
   const iconPlay = document.getElementById("sync-icon-play");
   const iconPause = document.getElementById("sync-icon-pause");
   const iconSync = document.getElementById("sync-icon-sync");
+  const iconWarn = document.getElementById("sync-icon-warning");
 
   let show, title, klass;
-  if (!running) {
-    show = iconPlay;
-    title = "Start downloading";
-    klass = null;
-  } else if (paused) {
-    show = iconPause;
-    title = "Resume downloading";
-    klass = "paused";
+  if (status === "downloading") {
+    show = iconSync; title = "Pause downloading"; klass = "active";
+  } else if (status === "waiting") {
+    show = iconSync; title = "Pause downloading"; klass = "waiting";
+  } else if (status === "paused") {
+    show = iconPause; title = "Resume downloading"; klass = "paused";
+  } else if (status === "error") {
+    // Surface the reason on the button tooltip too — users hovering
+    // the icon (not the badge) should still see why we're in error.
+    show = iconWarn;
+    title = state.syncStatusReason
+      ? "Error: " + state.syncStatusReason
+      : "Error";
+    klass = "error";
   } else {
-    show = iconSync;
-    title = "Pause downloading";
-    klass = "active";
+    // Unknown / initial — fall back to play icon, no class.
+    show = iconPlay; title = "Start downloading"; klass = null;
   }
 
   setVisible(iconPlay, show === iconPlay);
   setVisible(iconPause, show === iconPause);
   setVisible(iconSync, show === iconSync);
-  btn.classList.remove("active", "paused");
+  setVisible(iconWarn, show === iconWarn);
+  btn.classList.remove("active", "paused", "waiting", "error");
   if (klass) btn.classList.add(klass);
   btn.title = title;
 }
@@ -1683,31 +1693,51 @@ function appendLog(ev) {
 
 function handleEvent(ev) {
   appendLog(ev);
-  const statusEl = document.getElementById("dashcam-status");
+  const statusEl = document.getElementById("sync-status");
+  const STATUS_LABEL = {
+    downloading: "Downloading",
+    waiting: "Waiting",
+    paused: "Paused",
+    error: "Error",
+  };
+  const applyStatus = (status, reason) => {
+    state.syncStatus = status;
+    state.syncStatusReason = reason || null;
+    // For error states, surface the reason directly in the badge text
+    // rather than burying it in a hover-only tooltip — users won't
+    // know to hover, and on touch devices the tooltip is invisible.
+    let badgeText = STATUS_LABEL[status] || "";
+    if (status === "error" && reason) {
+      badgeText = "Error: " + reason;
+    }
+    statusEl.textContent = badgeText;
+    statusEl.className = "status " + (status || "");
+    statusEl.title = reason || "";
+    updateSyncState(status);
+  };
   switch (ev.type) {
     case "snapshot":
-      if (ev.state.dashcam_online === true) {
-        statusEl.textContent = "Dashcam online";
-        statusEl.className = "status online";
-      } else if (ev.state.dashcam_online === false) {
-        statusEl.textContent = "Dashcam offline";
-        statusEl.className = "status offline";
+      if (ev.state.sync_status) {
+        applyStatus(ev.state.sync_status, ev.state.sync_status_reason);
       }
       if (ev.state.current_item) updateCurrent(ev.state.current_item);
       if (ev.state.sync_state) {
-        updateSyncState(ev.state.sync_state.running, ev.state.sync_state.paused);
+        state.syncRunning = ev.state.sync_state.running;
+        state.syncPaused = ev.state.sync_state.paused;
       }
       break;
+    case "sync_status":
+      applyStatus(ev.status, ev.reason);
+      break;
     case "sync_state":
-      updateSyncState(ev.running, ev.paused);
+      state.syncRunning = ev.running;
+      state.syncPaused = ev.paused;
+      // Status follow-up will arrive separately; don't drive the badge here.
       break;
     case "dashcam_online":
-      statusEl.textContent = "Dashcam online";
-      statusEl.className = "status online";
-      break;
     case "dashcam_offline":
-      statusEl.textContent = "Dashcam offline — retrying…";
-      statusEl.className = "status offline";
+      // Connection events are still logged but no longer drive the badge.
+      // The follow-up sync_status event handles UI updates.
       break;
     case "item_started":
       updateCurrent({ filename: ev.filename, total: ev.total, bytes: 0 });

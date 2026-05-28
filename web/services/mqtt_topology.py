@@ -41,6 +41,7 @@ class EntityDef:
     state_fn: Optional[Callable]     # signature pinned in Task 6
     command_handler: Optional[Callable[[bytes], Awaitable[None]]]
     affected_by_hub_events: tuple[str, ...] = field(default_factory=tuple)
+    attrs_fn: Optional[Callable] = None
 
 
 def build_state_topic(object_id: str, cfg: dict) -> str:
@@ -49,6 +50,10 @@ def build_state_topic(object_id: str, cfg: dict) -> str:
 
 def build_command_topic(object_id: str, cfg: dict) -> str:
     return f"{cfg['node_id']}/{object_id}/cmd"
+
+
+def build_attrs_topic(object_id: str, cfg: dict) -> str:
+    return f"{cfg['node_id']}/{object_id}/attr"
 
 
 def build_discovery_topic(component: str, object_id: str, cfg: dict) -> str:
@@ -95,6 +100,8 @@ def build_discovery_payload(entity: EntityDef, cfg: dict) -> dict:
     }
     if entity.component in ("sensor", "binary_sensor"):
         payload["state_topic"] = build_state_topic(entity.object_id, cfg)
+    if entity.component in ("sensor", "binary_sensor") and entity.attrs_fn is not None:
+        payload["json_attributes_topic"] = build_attrs_topic(entity.object_id, cfg)
     if entity.component == "button":
         payload["command_topic"] = build_command_topic(entity.object_id, cfg)
     if entity.icon:
@@ -139,8 +146,12 @@ TOPOLOGY: list[EntityDef] = [
         state_fn=_st.state_sync_status,
         command_handler=None,
         affected_by_hub_events=(
-            "sync_state", "item_started", "item_finished", "queue_changed",
+            "sync_state", "item_started", "item_finished",
+            "queue_changed",
+            "dashcam_online", "dashcam_offline",
+            "disk_pct", "sync_error",
         ),
+        attrs_fn=_st.attrs_sync_status,
     ),
 
     # --- Queue ---

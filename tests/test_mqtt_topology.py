@@ -93,3 +93,24 @@ def test_command_handler_present_only_on_buttons():
     for e in TOPOLOGY:
         if e.command_handler is not None:
             assert e.component == "button", e.object_id
+
+
+def test_sync_status_entity_lists_new_affected_events():
+    from web.services.mqtt_topology import TOPOLOGY
+    entity = next(e for e in TOPOLOGY if e.object_id == "sync_status")
+    events = set(entity.affected_by_hub_events)
+    assert "dashcam_online" in events
+    assert "dashcam_offline" in events
+    assert "disk_pct" in events
+    assert "sync_error" in events
+    # Plus the original ones
+    assert "sync_state" in events
+    assert "item_started" in events
+    assert "item_finished" in events
+
+
+def test_sync_status_entity_has_attrs_fn():
+    from web.services.mqtt_topology import TOPOLOGY
+    from web.services.mqtt_state import attrs_sync_status
+    entity = next(e for e in TOPOLOGY if e.object_id == "sync_status")
+    assert entity.attrs_fn is attrs_sync_status

@@ -15,6 +15,8 @@ from __future__ import annotations
 import datetime as _dt
 from typing import Any, Optional
 
+from .sync_status import compute_sync_status
+
 
 def _iso_z(ts: int) -> str:
     """ISO 8601 with explicit UTC marker — what HA's timestamp
@@ -37,26 +39,17 @@ def state_dashcam(hub, db, snapshot) -> Optional[str]:
 
 
 def state_sync_status(hub, db, snapshot) -> Optional[str]:
-    sync_state = hub.last_state.get("sync_state")
-    current_item = hub.last_state.get("current_item")
-    if not sync_state or not sync_state.get("running"):
-        return "stopped"
-    if sync_state.get("paused"):
-        return "paused"
-    if current_item:
-        return "downloading"
-    # Between items in a sync cycle the in-flight slot is briefly empty
-    # while the worker writes the GPX sidecar, marks the row done, and
-    # picks the next clip. Treat "queue still has unfinished work" as
-    # downloading so HA doesn't flicker to "idle" every few seconds.
-    with db.conn() as c:
-        row = c.execute(
-            "SELECT COUNT(*) AS n FROM download_queue "
-            "WHERE state IN ('pending', 'downloading')"
-        ).fetchone()
-    if row["n"] > 0:
-        return "downloading"
-    return "idle"
+    """The four-state unified status string. See sync_status.py."""
+    state, _reason = compute_sync_status(hub, db, snapshot)
+    return state
+
+
+def attrs_sync_status(hub, db, snapshot) -> Optional[dict]:
+    """JSON attributes payload for the sync_status sensor. Always
+    returns a dict with a ``reason`` key so HA templating doesn't have
+    to guard for a missing attribute."""
+    _state, reason = compute_sync_status(hub, db, snapshot)
+    return {"reason": reason}
 
 
 # ---- queue counts
