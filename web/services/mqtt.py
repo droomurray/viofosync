@@ -62,10 +62,17 @@ class PublishCoalescer:
         now = self._mono()
         last = self._last_publish.get(topic)
         if last is None or (now - last) >= min_interval:
+            # Snapshot the current pending entry (if any) so that, after
+            # the sink await yields, we only clear an entry that's still
+            # the same object. A concurrent flush_due or consider may
+            # have installed a NEWER pending while we awaited — dropping
+            # it here would lose data.
+            pending_before = self._pending.get(topic)
             await sink(topic, payload, retain, qos)
             self._last_payload[topic] = payload
             self._last_publish[topic] = now
-            self._pending.pop(topic, None)
+            if self._pending.get(topic) is pending_before:
+                self._pending.pop(topic, None)
             return
         # Still inside the cooldown — stash the latest value.
         self._pending[topic] = _Pending(
@@ -84,7 +91,12 @@ class PublishCoalescer:
             await sink(topic, pend.payload, pend.retain, pend.qos)
             self._last_payload[topic] = pend.payload
             self._last_publish[topic] = now
-            del self._pending[topic]
+            # Identity check: a concurrent consider() running during the
+            # sink await may have popped this entry (payload matched
+            # the not-yet-updated _last_payload) — KeyError on bare del —
+            # or replaced it with a newer pending we must preserve.
+            if self._pending.get(topic) is pend:
+                del self._pending[topic]
 
     def forget(self, topic: str) -> None:
         self._last_payload.pop(topic, None)
@@ -126,8 +138,9 @@ async def _publish_entity_attrs(client, cfg, entity, hub, db, snap,
     import json as _json
     topic = build_attrs_topic(entity.object_id, cfg)
     payload = _json.dumps(attrs).encode()
+    qos = entity.qos if entity.qos is not None else cfg["qos"]
     await maybe_publish(client, topic, payload,
-                        retain=True, qos=cfg["qos"],
+                        retain=True, qos=qos,
                         min_interval=entity.min_publish_interval_s)
 
 
@@ -328,8 +341,9 @@ class MqttService:
             if value is None:
                 continue
             topic = build_state_topic(entity.object_id, cfg)
+            qos = entity.qos if entity.qos is not None else cfg["qos"]
             await self._maybe_publish(client, topic, value.encode(),
-                                       retain=True, qos=cfg["qos"],
+                                       retain=True, qos=qos,
                                        min_interval=entity.min_publish_interval_s)
             await _publish_entity_attrs(
                 client, cfg, entity, self._hub, self._db, snap,
@@ -407,12 +421,13 @@ class MqttService:
                         continue
                     if value is None:
                         continue
+                    qos = entity.qos if entity.qos is not None else cfg["qos"]
                     await self._maybe_publish(
                         client,
                         build_state_topic(entity.object_id, cfg),
                         value.encode(),
                         retain=True,
-                        qos=cfg["qos"],
+                        qos=qos,
                         min_interval=entity.min_publish_interval_s,
                     )
                     await _publish_entity_attrs(
@@ -544,10 +559,11 @@ class MqttService:
                     continue
                 if value is None:
                     continue
+                qos = entity.qos if entity.qos is not None else cfg["qos"]
                 await self._maybe_publish(
                     client,
                     build_state_topic(entity.object_id, cfg),
                     value.encode(),
-                    retain=True, qos=cfg["qos"],
+                    retain=True, qos=qos,
                     min_interval=0.0,
                 )

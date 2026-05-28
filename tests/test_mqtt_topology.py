@@ -114,3 +114,25 @@ def test_sync_status_entity_has_attrs_fn():
     from web.services.mqtt_state import attrs_sync_status
     entity = next(e for e in TOPOLOGY if e.object_id == "sync_status")
     assert entity.attrs_fn is attrs_sync_status
+
+
+def test_current_progress_uses_qos_0():
+    """current_progress fires on every item_progress event during a
+    download — it's the highest-rate publisher. QoS=1 PUBACK waits
+    stall the publisher under broker latency and trip the connection.
+    Retained QoS=0 still lets HA pick up the latest value on subscribe;
+    losing a single progress update mid-flight is acceptable.
+    """
+    from web.services.mqtt_topology import TOPOLOGY
+    entity = next(e for e in TOPOLOGY if e.object_id == "current_progress")
+    assert entity.qos == 0
+
+
+def test_state_entities_default_to_global_qos():
+    """Entities without an explicit qos override fall back to cfg['qos'].
+    Verify sync_status / dashcam (the reliability-sensitive state
+    entities) leave qos unset so the global setting wins."""
+    from web.services.mqtt_topology import TOPOLOGY
+    by_id = {e.object_id: e for e in TOPOLOGY}
+    assert by_id["sync_status"].qos is None
+    assert by_id["dashcam"].qos is None

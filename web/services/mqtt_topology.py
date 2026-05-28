@@ -42,6 +42,10 @@ class EntityDef:
     command_handler: Optional[Callable[[bytes], Awaitable[None]]]
     affected_by_hub_events: tuple[str, ...] = field(default_factory=tuple)
     attrs_fn: Optional[Callable] = None
+    # None → use the global MQTT_QOS setting. Override on disposable
+    # high-rate entities (e.g. current_progress) to QoS=0 so PUBACK
+    # latency from the broker can't stall the publisher.
+    qos: Optional[int] = None
 
 
 def build_state_topic(object_id: str, cfg: dict) -> str:
@@ -259,6 +263,7 @@ TOPOLOGY: list[EntityDef] = [
         command_handler=None,
         affected_by_hub_events=("item_progress", "item_started",
                                 "item_finished"),
+        qos=0,
     ),
 
     # --- Disk / sync history ---
