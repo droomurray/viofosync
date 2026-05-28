@@ -4,6 +4,23 @@ from __future__ import annotations
 import pytest
 
 
+class _FakeMqttService:
+    """Stand-in so the storage tests don't carry MQTT side effects.
+    The real service's settings-change subscriber schedules an async
+    task that survives past the TestClient context and leaks the
+    coroutine into the next test's setup phase."""
+
+    def __init__(self, **kwargs):
+        self._last_node_id = ""
+        self._last_discovery_prefix = ""
+
+    def start(self): pass
+    async def stop(self): pass
+    async def on_settings_changed(self, keys, snap): pass
+    def get_status(self):
+        return {"state": "idle", "detail": None, "last_published_at": None}
+
+
 @pytest.fixture
 def logged_in_client(tmp_config_dir, tmp_recordings_dir, monkeypatch):
     import bcrypt
@@ -22,6 +39,7 @@ def logged_in_client(tmp_config_dir, tmp_recordings_dir, monkeypatch):
     settings_mod.reset_for_tests()
 
     monkeypatch.setattr(SyncWorker, "start", lambda self: None)
+    monkeypatch.setattr("web.app.MqttService", _FakeMqttService)
 
     app = create_app()
     c = TestClient(app)
@@ -72,6 +90,7 @@ def test_usage_quota_mode_reports_against_declared_quota(
     from web import settings as settings_mod
     from web.services import retention
 
+    # Plant ~2 MiB under recordings, then set a 1 GiB quota.
     rec = tmp_recordings_dir
     (rec / "clip.MP4").write_bytes(b"\0" * (2 << 20))
     retention._size_cache.clear()
@@ -79,6 +98,9 @@ def test_usage_quota_mode_reports_against_declared_quota(
     p = settings_mod.get_provider()
     p.update({"RECORDINGS_QUOTA_GB": 1}, actor="test")
 
+    # Need to fetch CSRF first because update() goes through a write path
+    # — actually, provider.update() doesn't need CSRF; only the HTTP PUT
+    # does. The settings change here is in-process.
     r = logged_in_client.get("/api/storage/usage")
     assert r.status_code == 200
     body = r.json()
@@ -111,6 +133,7 @@ def test_usage_includes_threshold_when_set(
     settings_mod.reset_for_tests()
 
     monkeypatch.setattr(SyncWorker, "start", lambda self: None)
+    monkeypatch.setattr("web.app.MqttService", _FakeMqttService)
 
     with TestClient(create_app()) as c:
         c.post("/api/auth/login", json={"password": "pwpwpwpwpwpwpwpw"})

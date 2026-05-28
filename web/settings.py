@@ -71,6 +71,18 @@ class Snapshot:
 
     is_unconfigured: bool
 
+    mqtt_enabled: bool
+    mqtt_host: str
+    mqtt_port: int
+    mqtt_username: str
+    mqtt_password: str
+    mqtt_tls: bool
+    mqtt_client_id: str
+    mqtt_discovery_prefix: str
+    mqtt_node_id: str
+    mqtt_discovery_enabled: bool
+    mqtt_qos: int
+
 
 class SettingsProvider:
     def __init__(
@@ -235,6 +247,17 @@ class SettingsProvider:
             geocode_enabled=m.GEOCODE_ENABLED,
             distance_units=m.DISTANCE_UNITS,
             is_unconfigured=not m.WEB_PASSWORD_HASH,
+            mqtt_enabled=m.MQTT_ENABLED,
+            mqtt_host=m.MQTT_HOST,
+            mqtt_port=m.MQTT_PORT,
+            mqtt_username=m.MQTT_USERNAME,
+            mqtt_password=m.MQTT_PASSWORD,
+            mqtt_tls=m.MQTT_TLS,
+            mqtt_client_id=m.MQTT_CLIENT_ID,
+            mqtt_discovery_prefix=m.MQTT_DISCOVERY_PREFIX,
+            mqtt_node_id=m.MQTT_NODE_ID,
+            mqtt_discovery_enabled=m.MQTT_DISCOVERY_ENABLED,
+            mqtt_qos=m.MQTT_QOS,
         )
 
     # ---------------------------------------------------------- audit log

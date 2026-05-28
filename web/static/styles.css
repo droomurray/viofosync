@@ -990,7 +990,7 @@ main {
 .settings-pane .hint {
   font-size: 12px;
   color: var(--muted);
-  margin: 6px 0 0;
+  margin: 6px 0 1.5rem;
   max-width: 60ch;
   line-height: 1.55;
 }
@@ -1469,6 +1469,27 @@ main {
   *::after {
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ============================================================
+ * MQTT settings panel
+ * ============================================================ */
+#mqtt-panel { margin-top: 1rem; }
+#mqtt-panel .mqtt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .25rem; }
+#mqtt-panel .pw-wrap { display: flex; gap: .25rem; }
+#mqtt-panel .pw-wrap input { flex: 1; }
+#mqtt-status { display: flex; align-items: center; gap: .5rem; margin: .8rem 0; }
+#mqtt-status .dot { width: .7rem; height: .7rem; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+#mqtt-status .dot.green  { background: #19a974; }
+#mqtt-status .dot.amber  { background: #ffb700; }
+#mqtt-status .dot.red    { background: #d33; }
+#mqtt-status .dot.grey   { background: #999; }
+.mqtt-actions { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .5rem; }
+.mqtt-actions .primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
 }
 
 /* ============================================================

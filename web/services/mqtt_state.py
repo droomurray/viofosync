@@ -1,0 +1,154 @@
+"""Pure state-extraction functions for MQTT entity values.
+
+Every function has the signature ``(hub, db, snapshot) -> Optional[str]``
+where the string is the exact MQTT payload to publish, or ``None`` to
+skip publishing (the entity will appear as Unknown to HA, distinct from
+Unavailable which is the LWT-driven state).
+
+Functions read from ``hub.last_state`` (a dict updated by Hub.broadcast),
+the SQLite ``Database``, and the settings ``Snapshot``. No I/O beyond
+SQLite, plus whatever the retention service does to compute the
+quota-aware used-% for the disk gauge.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+from typing import Any, Optional
+
+
+def _iso_z(ts: int) -> str:
+    """ISO 8601 with explicit UTC marker — what HA's timestamp
+    device_class expects."""
+    return (
+        _dt.datetime.fromtimestamp(ts, tz=_dt.timezone.utc)
+        .strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    )
+
+
+# ---- binary sensors
+
+def state_dashcam(hub, db, snapshot) -> Optional[str]:
+    if not snapshot.address:
+        return "OFF"
+    val = hub.last_state.get("dashcam_online")
+    if val is None:
+        return None
+    return "ON" if val else "OFF"
+
+
+def state_sync_status(hub, db, snapshot) -> Optional[str]:
+    sync_state = hub.last_state.get("sync_state")
+    current_item = hub.last_state.get("current_item")
+    if not sync_state or not sync_state.get("running"):
+        return "stopped"
+    if sync_state.get("paused"):
+        return "paused"
+    if current_item:
+        return "downloading"
+    # Between items in a sync cycle the in-flight slot is briefly empty
+    # while the worker writes the GPX sidecar, marks the row done, and
+    # picks the next clip. Treat "queue still has unfinished work" as
+    # downloading so HA doesn't flicker to "idle" every few seconds.
+    with db.conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*) AS n FROM download_queue "
+            "WHERE state IN ('pending', 'downloading')"
+        ).fetchone()
+    if row["n"] > 0:
+        return "downloading"
+    return "idle"
+
+
+# ---- queue counts
+
+def _queue_count(db, state: str) -> int:
+    with db.conn() as c:
+        row = c.execute(
+            "SELECT COUNT(*) AS n FROM download_queue WHERE state=?",
+            (state,),
+        ).fetchone()
+    return row["n"]
+
+
+def state_queue_pending(hub, db, snapshot) -> Optional[str]:
+    return str(_queue_count(db, "pending"))
+
+
+def state_queue_failed(hub, db, snapshot) -> Optional[str]:
+    return str(_queue_count(db, "failed"))
+
+
+def state_queue_downloading(hub, db, snapshot) -> Optional[str]:
+    return str(_queue_count(db, "downloading"))
+
+
+# ---- archive
+
+def state_last_downloaded_clip(hub, db, snapshot) -> Optional[str]:
+    with db.conn() as c:
+        row = c.execute(
+            "SELECT MAX(timestamp) AS m FROM clip_index"
+        ).fetchone()
+    ts = row["m"]
+    if not ts:
+        return None
+    return _iso_z(int(ts))
+
+
+def state_total_clips(hub, db, snapshot) -> Optional[str]:
+    with db.conn() as c:
+        row = c.execute("SELECT COUNT(*) AS n FROM clip_index").fetchone()
+    return str(row["n"])
+
+
+# ---- current download
+
+def state_current_filename(hub, db, snapshot) -> Optional[str]:
+    ci = hub.last_state.get("current_item")
+    if not ci:
+        return None
+    return ci.get("filename")
+
+
+def state_current_progress(hub, db, snapshot) -> Optional[str]:
+    ci = hub.last_state.get("current_item") or {}
+    total = ci.get("total")
+    done = ci.get("bytes")
+    if not total or done is None:
+        return None
+    pct = round(100 * done / total, 1)
+    return f"{pct}"
+
+
+# ---- disk
+
+def state_disk_used(hub, db, snapshot) -> Optional[str]:
+    """Report the higher of (filesystem %, quota %) — that's the
+    rule closest to triggering retention cleanup. Reusing the
+    retention service's cache means the sweep and the sensor see
+    identical numbers.
+
+    Filesystem mode (no quota set): the rule reports the underlying
+    volume's used %. Quota mode (RECORDINGS_QUOTA_GB > 0): the rule
+    reports bytes-under-recordings ÷ quota. Independent triggers
+    (post-cherry-pick) mean both rules can be active at once; we
+    publish the max so a single HA threshold alerts on either.
+    """
+    from . import retention as _ret
+    quota = getattr(snapshot, "recordings_quota_gb", 0) or 0
+
+    # Filesystem rule is always queryable (there's always a mounted
+    # volume under recordings). Quota rule is opt-in via the setting.
+    candidates = []
+    pct_fs = _ret.disk_used_pct(snapshot.recordings, quota_gb=0)
+    if pct_fs is not None:
+        candidates.append(pct_fs)
+    if quota > 0:
+        pct_quota = _ret.disk_used_pct(snapshot.recordings, quota_gb=quota)
+        if pct_quota is not None:
+            candidates.append(pct_quota)
+    if not candidates:
+        return None
+    return str(int(round(max(candidates))))
+
+

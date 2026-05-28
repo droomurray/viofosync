@@ -8,12 +8,13 @@ Self-hosted web app for syncing, browsing, and exporting recordings from a Viofo
 
 ## Features
 
-- **Archive browser** — view clips grouped by day, front/rear pairs, on-demand thumbnails, in-browser playback, kind filters (Driving / Parking / Read-only), GPS-maps toggle for low-bandwidth browsing.
-- **GPS journeys** — Leaflet + OSM map per trip, automatic stop detection splits a day into journeys, reverse-geocoded start/end labels (e.g. *Whitegate → Sandiway*).
-- **Exports** — select clip pairs, render joined front-only, rear-only, or picture-in-picture videos with ffmpeg. Hardware H.264 (videotoolbox / nvenc / qsv / vaapi) when available, software libx264 fallback.
-- **Download manager** — live progress, reorderable queue, reachability badge, transient timeouts re-queue instead of burning retries.
-- **Auto-delete from dashcam** *(optional)* — clears each clip from the device once it's downloaded and verified.
-- **Settings page** — runtime settings hot-reload rather than Docker env vars; only `WEB_HOST`/`WEB_PORT` need a restart.
+- **Archive browser** — clips grouped by day, paired front/rear, in-browser playback.
+- **GPS journeys** — map per trip with auto-split stops and reverse-geocoded place names.
+- **Exports** — joined front, rear, or picture-in-picture videos via ffmpeg.
+- **Download manager** — live progress and a reorderable queue.
+- **Auto-delete from dashcam** *(optional)* — frees SD card space once a clip is safely downloaded.
+- **Settings page** — runtime settings hot-reload; no Docker env vars to fiddle with.
+- **Home Assistant** *(optional)* — auto-discovered sensors and buttons via MQTT.
 
 ## Hardware
 
@@ -56,6 +57,52 @@ The only Docker-level env vars are:
 
 
 App-level settings (sync interval, dashcam IP, encoder, geocoding email, web port, retention, password, auto-delete, etc.) are editable on the **Settings** page. Advanced users can hand-edit `/config/config.json` between restarts; the schema lives in `[web/settings_schema.py](web/settings_schema.py)`.
+
+## Home Assistant via MQTT
+
+viofosync can publish state and accept actions over MQTT, with full
+Home Assistant auto-discovery — no HA-side YAML required.
+
+Enable on the Settings page → MQTT. You'll need:
+
+- A reachable MQTT broker (Mosquitto, HA's built-in broker, EMQX, etc.).
+- Broker host + port. Optional username, password, and TLS.
+- A `Node ID` (default `viofosync`) — used as the topic prefix and as
+  the `node_id` slot in HA discovery topics. Letters, digits, and `_`
+  only. Set a distinct value per instance if you run more than one.
+
+When MQTT is on, viofosync publishes:
+
+- **Discovery configs** under `homeassistant/{component}/{node_id}/{object_id}/config`
+  (retained) so HA picks them up immediately.
+- **State** under `{node_id}/{object_id}/state` (retained, event-driven,
+  no idle traffic).
+- **Availability** to `{node_id}/availability` (`online` / `offline`),
+  with LWT so HA marks every entity Unavailable within ~45s of an
+  unclean disconnect.
+
+### Sensors and buttons
+
+Enabled by default in HA: dashcam connectivity, sync status
+(`stopped` / `idle` / `paused` / `downloading`), queue pending, last
+downloaded clip, disk used, and six action buttons
+(start/pause/skip/refresh/retry-failed/rescan).
+
+Disabled-by-default (still created — enable per-entity in HA): queue
+failed, queue downloading, current filename, current progress, total
+clips.
+
+### Parameterised command
+
+For "prioritize the last N hours", publish to
+`{node_id}/cmd/prioritize_recent` with payload `{"hours": 0.5}` (HA's
+`mqtt.publish` service works). `hours` must be in (0, 168].
+
+### Security notes
+
+- The MQTT password is stored in `config.json` in plaintext, alongside
+  the bcrypt hash of the admin password and the session secret. The
+  same access controls already apply to that file.
 
 ## Reverse geocoding
 

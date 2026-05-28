@@ -618,3 +618,40 @@ def retry(db: Database, filenames: List[str]) -> int:
             filenames,
         )
         return cur.rowcount
+
+
+def retry_failed(db: Database) -> int:
+    """Move every queue item in state ``failed`` back to ``pending``,
+    resetting attempts. Returns the count updated."""
+    with db.write() as c:
+        cur = c.execute(
+            "UPDATE download_queue SET state='pending', "
+            "attempts=0, last_error=NULL WHERE state='failed'"
+        )
+        return cur.rowcount
+
+
+def emit_queue_changed(db: Database, hub, *, loop=None) -> None:
+    """Broadcast queue_changed; ``loop`` required when calling from
+    a non-loop thread (sync_worker download thread)."""
+    if hub is None:
+        return
+    with db.conn() as c:
+        rows = c.execute(
+            "SELECT state, COUNT(*) AS n FROM download_queue "
+            "WHERE state IN ('pending','downloading','failed') "
+            "GROUP BY state"
+        ).fetchall()
+    counts = {"pending": 0, "downloading": 0, "failed": 0}
+    for r in rows:
+        counts[r["state"]] = r["n"]
+    event = {"type": "queue_changed", **counts}
+    import asyncio as _asyncio
+    try:
+        running = _asyncio.get_running_loop()
+        running.create_task(hub.broadcast(event))
+        return
+    except RuntimeError:
+        pass
+    if loop is not None:
+        hub.schedule_broadcast(loop, event)

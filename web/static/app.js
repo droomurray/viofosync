@@ -1836,7 +1836,13 @@ function renderSettingsSection(name) {
     web: renderWebSection,
     security: renderSecuritySection,
     system: renderSystemSection,
+    mqtt: renderMqttSection,
   };
+  // Clear MQTT status polling if navigating away from that section.
+  if (name !== "mqtt" && _mqttStatusTimer) {
+    clearInterval(_mqttStatusTimer);
+    _mqttStatusTimer = null;
+  }
   pane.innerHTML = "";
   (fns[name] || fns.dashcam)(pane);
 }
@@ -2241,6 +2247,103 @@ function renderSystemSection(pane) {
     document.body.innerHTML = "<h1>Restarting…</h1><p>The page will reload in 5 seconds.</p>";
     setTimeout(() => window.location.reload(), 5000);
   });
+}
+
+// ---- MQTT section ----
+
+let _mqttStatusTimer = null;
+
+async function refreshMqttStatus() {
+  const el = document.getElementById("mqtt-status");
+  if (!el) { clearInterval(_mqttStatusTimer); _mqttStatusTimer = null; return; }
+  try {
+    const body = await api("/api/mqtt/status");
+    const dot  = el.querySelector(".dot");
+    const text = el.querySelector(".mqtt-status-text");
+    dot.className = "dot " + ({
+      connected:    "green",
+      connecting:   "amber",
+      reconnecting: "amber",
+      error:        "red",
+      disabled:     "grey",
+      idle:         "grey",
+    }[body.state] || "grey");
+    text.textContent = ({
+      connected:    `Connected (${body.detail || ""})`,
+      connecting:   `Connecting (${body.detail || ""})`,
+      reconnecting: `Reconnecting (${body.detail || ""})`,
+      error:        `Error: ${body.detail || ""}`,
+      disabled:     "Disabled",
+      idle:         body.detail || "Not configured",
+    }[body.state] || body.state);
+  } catch (_) { /* silently ignore if panel navigated away */ }
+}
+
+function renderMqttSection(pane) {
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent =
+    "Publish state and accept actions over MQTT, with Home Assistant " +
+    "auto-discovery. See README for the topic structure.";
+  pane.appendChild(hint);
+
+  renderField(pane, "MQTT_ENABLED", "Enable MQTT", checkbox("MQTT_ENABLED"));
+  renderField(pane, "MQTT_HOST", "Broker host", textInput("MQTT_HOST"));
+  renderField(pane, "MQTT_PORT", "Port",
+              textInput("MQTT_PORT", { type: "number", min: 1, max: 65535 }));
+  renderField(pane, "MQTT_USERNAME", "Username", textInput("MQTT_USERNAME"));
+  renderField(pane, "MQTT_PASSWORD", "Password",
+              textInput("MQTT_PASSWORD", { type: "password" }));
+  renderField(pane, "MQTT_TLS", "Use TLS", checkbox("MQTT_TLS"));
+  renderField(pane, "MQTT_CLIENT_ID", "Client ID", textInput("MQTT_CLIENT_ID"));
+  renderField(pane, "MQTT_NODE_ID", "Node ID", textInput("MQTT_NODE_ID"));
+  renderField(pane, "MQTT_DISCOVERY_PREFIX", "Discovery prefix",
+              textInput("MQTT_DISCOVERY_PREFIX"));
+  renderField(pane, "MQTT_DISCOVERY_ENABLED", "Publish Home Assistant discovery",
+              checkbox("MQTT_DISCOVERY_ENABLED"));
+  renderField(pane, "MQTT_QOS", "QoS", select("MQTT_QOS", [0, 1, 2]));
+
+  // Status indicator
+  const statusEl = document.createElement("p");
+  statusEl.id = "mqtt-status";
+  statusEl.innerHTML = '<span class="dot grey"></span><span class="mqtt-status-text">Disabled</span>';
+  pane.appendChild(statusEl);
+
+  // Test connection button
+  const testBtn = document.createElement("button");
+  testBtn.type = "button";
+  testBtn.id = "mqtt-test-btn";
+  testBtn.textContent = "Test connection";
+  testBtn.addEventListener("click", async () => {
+    testBtn.disabled = true;
+    testBtn.textContent = "Testing…";
+    try {
+      const body = {
+        host:      valueOf("MQTT_HOST"),
+        port:      Number(valueOf("MQTT_PORT") || 1883),
+        username:  valueOf("MQTT_USERNAME"),
+        password:  valueOf("MQTT_PASSWORD"),
+        tls:       !!valueOf("MQTT_TLS"),
+        client_id: valueOf("MQTT_CLIENT_ID"),
+      };
+      const result = await api("/api/mqtt/test", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      alert(result.detail);
+    } catch (e) {
+      alert("Test failed: " + (e.message || e));
+    } finally {
+      testBtn.disabled = false;
+      testBtn.textContent = "Test connection";
+    }
+  });
+  pane.appendChild(testBtn);
+
+  // Initial status fetch + start polling (cleared when pane re-renders)
+  refreshMqttStatus();
+  if (_mqttStatusTimer) clearInterval(_mqttStatusTimer);
+  _mqttStatusTimer = setInterval(refreshMqttStatus, 5000);
 }
 
 function showRestartBanner() {

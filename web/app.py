@@ -29,6 +29,7 @@ from .routers import exports as exports_router
 from .routers import progress as progress_router
 from .routers import queue as queue_router
 from .routers import settings as settings_router
+from .routers import mqtt as mqtt_router
 from .routers import setup as setup_router
 from .routers import storage as storage_router
 from .services import retention as _ret_mod
@@ -40,6 +41,7 @@ from .services.exporter import (
 )
 from .services.geocode import GeocodeService
 from .services.hub import Hub
+from .services.mqtt import MqttService
 from .services.sync_worker import SyncWorker
 from .setup_mode import SetupModeMiddleware
 
@@ -104,8 +106,10 @@ async def lifespan(app: FastAPI):
     async def _background_scan() -> None:
         try:
             log.info("initial archive scan: starting (%s)", s.recordings)
+            loop = asyncio.get_running_loop()
             n = await asyncio.to_thread(
                 scanner.scan, app.state.db, s.recordings, s.grouping,
+                app.state.hub, loop,
             )
             log.info("initial archive scan: %d clips indexed", n)
         except Exception as e:  # pragma: no cover — non-fatal
@@ -172,10 +176,33 @@ async def lifespan(app: FastAPI):
             "ADDRESS not set — sync worker idle until configured"
         )
 
+    app.state.mqtt = MqttService(
+        db=app.state.db,
+        provider=provider,
+        hub=app.state.hub,
+        app=app,
+    )
+    if s.mqtt_enabled and s.mqtt_host:
+        app.state.mqtt.start()
+
+    # Track current discovery/node so on_settings_changed can publish
+    # cleanup deletes against the *old* topology when those change.
+    app.state.mqtt._last_node_id = s.mqtt_node_id
+    app.state.mqtt._last_discovery_prefix = s.mqtt_discovery_prefix
+
+    def _on_mqtt_settings_change(keys, snap):
+        # Scheduled on the running loop so async work executes safely.
+        asyncio.create_task(app.state.mqtt.on_settings_changed(keys, snap))
+
+    provider.subscribe(_on_mqtt_settings_change)
+
     try:
         yield
     finally:
         log.info("viofosync web UI shutting down")
+        mqtt_svc = getattr(app.state, "mqtt", None)
+        if mqtt_svc is not None:
+            await mqtt_svc.stop()
         for attr in ("initial_scan_task", "retention_task"):
             task = getattr(app.state, attr, None)
             if task is not None and not task.done():
@@ -196,7 +223,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="Viofosync",
-        version="0.1",
+        version="2.2",
         lifespan=lifespan,
         docs_url=None,       # no swagger in prod build
         redoc_url=None,
@@ -211,6 +238,7 @@ def create_app() -> FastAPI:
     app.include_router(progress_router.router)
     app.include_router(settings_router.router)
     app.include_router(setup_router.router)
+    app.include_router(mqtt_router.router)
     app.include_router(storage_router.router)
 
     # Static SPA — served at / with an explicit index.html fall-through

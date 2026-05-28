@@ -53,6 +53,17 @@ def _editable_values(snap) -> dict[str, Any]:
         "NOMINATIM_EMAIL": snap.nominatim_email,
         "GEOCODE_ENABLED": snap.geocode_enabled,
         "DISTANCE_UNITS": snap.distance_units,
+        "MQTT_ENABLED": snap.mqtt_enabled,
+        "MQTT_HOST": snap.mqtt_host,
+        "MQTT_PORT": snap.mqtt_port,
+        "MQTT_USERNAME": snap.mqtt_username,
+        "MQTT_PASSWORD": snap.mqtt_password,
+        "MQTT_TLS": snap.mqtt_tls,
+        "MQTT_CLIENT_ID": snap.mqtt_client_id,
+        "MQTT_DISCOVERY_PREFIX": snap.mqtt_discovery_prefix,
+        "MQTT_NODE_ID": snap.mqtt_node_id,
+        "MQTT_DISCOVERY_ENABLED": snap.mqtt_discovery_enabled,
+        "MQTT_QOS": snap.mqtt_qos,
     }
 
 

@@ -475,6 +475,7 @@ class SyncWorker:
             "summary": summary,
             "queue": q.list_all(self.db, limit=200),
         })
+        q.emit_queue_changed(self.db, self.hub)
         return True
 
     async def _cycle(self) -> bool:
@@ -540,6 +541,7 @@ class SyncWorker:
                 await asyncio.to_thread(
                     scanner.scan,
                     self.db, snap.recordings, snap.grouping,
+                    self.hub, asyncio.get_running_loop(),
                 )
                 await scanner.sweep_missing_thumbs(
                     self.db, snap.recordings,
@@ -656,6 +658,7 @@ class SyncWorker:
 
         if ok:
             q.mark_done(self.db, item.id)
+            q.emit_queue_changed(self.db, self.hub)
             return True
 
         new_state = q.mark_transient_failure(
@@ -664,6 +667,7 @@ class SyncWorker:
             err or "unknown",
             snap.max_attempts,
         )
+        q.emit_queue_changed(self.db, self.hub)
         await self.hub.broadcast({
             "type": "item_state_change",
             "filename": item.filename,

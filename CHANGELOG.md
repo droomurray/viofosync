@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- MQTT publishing with Home Assistant auto-discovery. New Settings
+  panel exposes broker host/port/credentials, TLS, topic prefix, and
+  discovery prefix. Publishes 12 sensor/binary_sensor entities and 6
+  action buttons; idle traffic is zero thanks to per-topic change
+  detection and coalescing. LWT keeps HA's view consistent with
+  viofosync's actual state.
+
 ## v2.1 — 2026-05-16
 
 ### Fixed

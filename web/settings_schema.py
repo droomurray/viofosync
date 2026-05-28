@@ -11,7 +11,7 @@ import re
 import secrets
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 GROUPING_OPTIONS = ("none", "daily", "weekly", "monthly", "yearly")
 ENCODER_OPTIONS = ("auto", "software", "videotoolbox", "nvenc", "qsv", "vaapi")
@@ -19,6 +19,7 @@ ENCODER_OPTIONS = ("auto", "software", "videotoolbox", "nvenc", "qsv", "vaapi")
 # Valid hostname per RFC 1123 (relaxed) or IPv4/IPv6.
 _HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)([a-zA-Z0-9][a-zA-Z0-9-]{0,62})(\.[a-zA-Z0-9][a-zA-Z0-9-]{0,62})*$")
 _IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
+_MQTT_NODE_ID_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 
 
 class SettingsModel(BaseModel):
@@ -63,6 +64,18 @@ class SettingsModel(BaseModel):
     GEOCODE_ENABLED: bool = True
     DISTANCE_UNITS: Literal["km", "miles"] = "km"
 
+    MQTT_ENABLED: bool = False
+    MQTT_HOST: str = ""
+    MQTT_PORT: int = Field(default=1883, ge=1, le=65535)
+    MQTT_USERNAME: str = ""
+    MQTT_PASSWORD: str = ""
+    MQTT_TLS: bool = False
+    MQTT_CLIENT_ID: str = ""
+    MQTT_DISCOVERY_PREFIX: str = "homeassistant"
+    MQTT_NODE_ID: str = "viofosync"
+    MQTT_DISCOVERY_ENABLED: bool = True
+    MQTT_QOS: Literal[0, 1, 2] = 1
+
     @field_validator("ADDRESS")
     @classmethod
     def _validate_address(cls, v: str | None) -> str | None:
@@ -82,6 +95,42 @@ class SettingsModel(BaseModel):
             raise ValueError("not a valid email address")
         return v
 
+    @field_validator("MQTT_HOST")
+    @classmethod
+    def _validate_mqtt_host(cls, v: str) -> str:
+        if not v:
+            return ""
+        v = v.strip()
+        if _IPV4_RE.match(v) or _HOSTNAME_RE.match(v) or ":" in v:
+            return v
+        raise ValueError(f"not a valid MQTT host: {v!r}")
+
+    @field_validator("MQTT_NODE_ID")
+    @classmethod
+    def _validate_mqtt_node_id(cls, v: str) -> str:
+        if not _MQTT_NODE_ID_RE.match(v):
+            raise ValueError(
+                "MQTT_NODE_ID must match [a-z0-9_]{1,32}"
+            )
+        return v
+
+    @field_validator("MQTT_DISCOVERY_PREFIX")
+    @classmethod
+    def _validate_mqtt_discovery_prefix(cls, v: str) -> str:
+        if not v:
+            raise ValueError("MQTT_DISCOVERY_PREFIX must not be empty")
+        if v.startswith("/") or v.endswith("/"):
+            raise ValueError(
+                "MQTT_DISCOVERY_PREFIX must not start/end with '/'"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _validate_mqtt_cross_field(self):
+        if self.MQTT_ENABLED and not self.MQTT_HOST:
+            raise ValueError("MQTT_HOST is required when MQTT_ENABLED is True")
+        return self
+
 
 # Public taxonomy used by the API + UI.
 EDITABLE_KEYS = {
@@ -93,6 +142,10 @@ EDITABLE_KEYS = {
     "RETENTION_PROTECT_RO", "RECORDINGS_QUOTA_GB",
     "DISTANCE_UNITS",
     "PIP_POSITION",
+    "MQTT_ENABLED", "MQTT_HOST", "MQTT_PORT", "MQTT_USERNAME",
+    "MQTT_PASSWORD", "MQTT_TLS", "MQTT_CLIENT_ID",
+    "MQTT_DISCOVERY_PREFIX", "MQTT_NODE_ID",
+    "MQTT_DISCOVERY_ENABLED", "MQTT_QOS",
 }
 RESTART_REQUIRED_KEYS = {"WEB_HOST", "WEB_PORT"}
 READONLY_KEYS = {"PUID", "PGID", "TZ", "RECORDINGS"}
