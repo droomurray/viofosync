@@ -10,7 +10,7 @@ Self-hosted web app for syncing, browsing, and exporting recordings from a Viofo
 
 - **Archive browser** — clips grouped by day, paired front/rear, in-browser playback.
 - **GPS journeys** — map per trip with auto-split stops and reverse-geocoded place names.
-- **Exports** — joined front, rear, or picture-in-picture videos via ffmpeg.
+- **Exports** — joined front/rear or picture-in-picture (front-main or rear-main) videos via ffmpeg, with download names derived from the clip date range and camera. Or grab the **original** front/rear clips directly, un-joined.
 - **Download manager** — live progress and a reorderable queue.
 - **Auto-delete from dashcam** *(optional)* — frees SD card space once a clip is safely downloaded.
 - **Settings page** — runtime settings hot-reload; no Docker env vars to fiddle with.

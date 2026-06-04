@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from ..auth import require_csrf, require_session
+from ..services.naming import export_download_name, parse_clip_ids
 
 router = APIRouter(
     prefix="/api/exports",
@@ -44,7 +45,7 @@ def _resolve_default_encoder(app_state) -> str:
 
 class CreateExport(BaseModel):
     type: str = Field(
-        pattern="^(join_front|join_rear|pip)$"
+        pattern="^(join_front|join_rear|pip|pip_rear)$"
     )
     clip_ids: List[int]
     encoder: str | None = Field(
@@ -106,20 +107,39 @@ def list_jobs(request: Request) -> JSONResponse:
 def download(job_id: int, request: Request):
     with request.app.state.db.conn() as c:
         row = c.execute(
-            "SELECT output_path, state FROM export_jobs WHERE id=?",
+            "SELECT output_path, state, type, clip_ids "
+            "FROM export_jobs WHERE id=?",
             (job_id,),
         ).fetchone()
-    if row is None:
-        raise HTTPException(404, "job not found")
-    if row["state"] != "done":
-        raise HTTPException(409, f"job not ready (state={row['state']})")
-    path = row["output_path"]
-    if not path or not os.path.isfile(path):
-        raise HTTPException(410, "output missing")
+        if row is None:
+            raise HTTPException(404, "job not found")
+        if row["state"] != "done":
+            raise HTTPException(
+                409, f"job not ready (state={row['state']})"
+            )
+        path = row["output_path"]
+        if not path or not os.path.isfile(path):
+            raise HTTPException(410, "output missing")
+        # Best-effort friendly filename from the source clips'
+        # timestamps. If retention pruned them we fall back to the
+        # legacy name inside export_download_name.
+        clip_ids = parse_clip_ids(row["clip_ids"])
+        clips = []
+        if clip_ids:
+            ph = ",".join("?" * len(clip_ids))
+            clips = [
+                dict(r)
+                for r in c.execute(
+                    f"SELECT timestamp FROM clip_index "
+                    f"WHERE id IN ({ph})",
+                    clip_ids,
+                ).fetchall()
+            ]
+    filename = export_download_name(row["type"], clips, job_id)
     return FileResponse(
         path,
         media_type="video/mp4",
-        filename=f"viofosync_export_{job_id}.mp4",
+        filename=filename,
     )
 
 

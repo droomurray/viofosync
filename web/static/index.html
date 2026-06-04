@@ -94,9 +94,33 @@
           </button>
           <span id="selection-count" class="selection-hint" aria-live="polite"></span>
           <div class="spacer"></div>
-          <button type="button" id="export-join-front">Join front</button>
-          <button type="button" id="export-join-rear">Join rear</button>
-          <button type="button" id="export-pip">Picture-in-picture</button>
+          <div class="action-group">
+            <span class="action-label">Originals:</span>
+            <button type="button" id="dl-orig-front"
+                    aria-label="Download selected front originals"
+                    title="Download selected front originals">F</button>
+            <button type="button" id="dl-orig-rear"
+                    aria-label="Download selected rear originals"
+                    title="Download selected rear originals">R</button>
+          </div>
+          <div class="action-group">
+            <span class="action-label">Joined:</span>
+            <button type="button" id="export-join-front"
+                    aria-label="Join selected front clips"
+                    title="Join selected front clips">F</button>
+            <button type="button" id="export-join-rear"
+                    aria-label="Join selected rear clips"
+                    title="Join selected rear clips">R</button>
+          </div>
+          <div class="action-group">
+            <span class="action-label">PIP:</span>
+            <button type="button" id="export-pip-front"
+                    aria-label="Picture-in-picture, front main"
+                    title="Picture-in-picture, front main">Fr</button>
+            <button type="button" id="export-pip-rear"
+                    aria-label="Picture-in-picture, rear main"
+                    title="Picture-in-picture, rear main">Rf</button>
+          </div>
           <button type="button" id="clear-selection">Clear</button>
         </div>
         <div id="exports-panel" class="exports-panel" hidden>

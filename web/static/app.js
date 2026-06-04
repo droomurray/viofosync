@@ -1009,9 +1009,13 @@ function updateArchiveActions() {
     if (v.rear) rears++;
     if (v.front && v.rear) both++;
   }
-  document.getElementById("export-join-front").disabled = fronts === 0;
-  document.getElementById("export-join-rear").disabled = rears === 0;
-  document.getElementById("export-pip").disabled = both === 0;
+  const hasFront = fronts > 0, hasRear = rears > 0, hasPair = both > 0;
+  document.getElementById("dl-orig-front").disabled = !hasFront;
+  document.getElementById("dl-orig-rear").disabled = !hasRear;
+  document.getElementById("export-join-front").disabled = !hasFront;
+  document.getElementById("export-join-rear").disabled = !hasRear;
+  document.getElementById("export-pip-front").disabled = !hasPair;
+  document.getElementById("export-pip-rear").disabled = !hasPair;
   document.getElementById("clear-selection").disabled = n === 0;
 }
 
@@ -1030,12 +1034,40 @@ function clearSelection() {
   updateArchiveActions();
 }
 
+function downloadOriginals(slot) {
+  // slot: "front" | "rear". Download each selected original clip
+  // as its own file (no ZIP). The clip stream endpoint sends
+  // Content-Disposition: attachment with the dashcam basename, so
+  // a same-origin anchor click triggers a named download. Stagger
+  // the clicks (150ms) so the browser queues them instead of
+  // dropping all but the last, and shows its one "allow multiple
+  // downloads" prompt once — small enough that a big selection
+  // doesn't take ages to fire.
+  const ids = [];
+  for (const v of state.archiveSelected.values()) {
+    if (slot === "front" && v.front) ids.push(v.front);
+    else if (slot === "rear" && v.rear) ids.push(v.rear);
+  }
+  if (!ids.length) return;
+  ids.forEach((id, i) => {
+    setTimeout(() => {
+      const a = document.createElement("a");
+      a.href = `/api/archive/clip/${id}/video`;
+      // No download attr: rely on the server's Content-Disposition
+      // filename (the original basename) rather than the URL tail.
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }, i * 150);
+  });
+}
+
 async function submitExport(type) {
   const ids = [];
   for (const v of state.archiveSelected.values()) {
     if (type === "join_front" && v.front) ids.push(v.front);
     else if (type === "join_rear" && v.rear) ids.push(v.rear);
-    else if (type === "pip") {
+    else if (type === "pip" || type === "pip_rear") {
       if (v.front) ids.push(v.front);
       if (v.rear) ids.push(v.rear);
     }
@@ -1085,12 +1117,18 @@ document.getElementById("exports-toggle").addEventListener("click", () => {
   setExportsPanelOpen(!open);
 });
 
+document.getElementById("dl-orig-front")
+  .addEventListener("click", () => downloadOriginals("front"));
+document.getElementById("dl-orig-rear")
+  .addEventListener("click", () => downloadOriginals("rear"));
 document.getElementById("export-join-front")
   .addEventListener("click", () => submitExport("join_front"));
 document.getElementById("export-join-rear")
   .addEventListener("click", () => submitExport("join_rear"));
-document.getElementById("export-pip")
+document.getElementById("export-pip-front")
   .addEventListener("click", () => submitExport("pip"));
+document.getElementById("export-pip-rear")
+  .addEventListener("click", () => submitExport("pip_rear"));
 document.getElementById("clear-selection")
   .addEventListener("click", clearSelection);
 

@@ -3,6 +3,13 @@
 ## Unreleased
 
 ### Added
+- Export downloads now use sensible filenames derived from the
+  selected clips' date range, camera, and clip count
+  (e.g. `2024-03-15_1430-1502_front_4clips.mp4`).
+- Download the original front/rear clips directly as individual
+  files, without joining.
+- New rear-main picture-in-picture export variant (rear fullscreen,
+  front inset) alongside the existing front-main one.
 - Optional **Alternative address** for the same camera (Settings →
   Dashcam, setting `ADDRESS_FALLBACK`). The primary is always tried
   first; the alternative is used only when the primary is unreachable,
