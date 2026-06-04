@@ -1664,15 +1664,40 @@ document.getElementById("q-prio-recent").addEventListener("click", async () => {
 function renderQueueMeta() {
   let total = 0;
   let pending = 0;
+  let failed = 0;
   for (const d of state.queueDays) {
     total += d.clip_count;
     pending += d.pending_count;
+    failed += d.failed_count || 0;
   }
   const sel = state.queueSelected.size;
   let text = `${total} files across ${state.queueDays.length} days · ${pending} pending`;
   if (sel) text += ` · ${sel} selected`;
   document.getElementById("queue-meta").textContent = text;
+  updateRetryFailedButton(failed);
 }
+
+function updateRetryFailedButton(failedCount) {
+  const btn = document.getElementById("q-retry-failed");
+  if (!btn) return;
+  btn.hidden = failedCount === 0;
+  btn.textContent = `Retry failed (${failedCount})`;
+}
+
+// Re-queue every failed file. Empty body => retry all (server-side).
+document.getElementById("q-retry-failed").addEventListener("click", async () => {
+  const btn = document.getElementById("q-retry-failed");
+  if (!window.confirm(
+    "Retry all failed files? They'll be reset and re-queued for download."
+  )) return;
+  btn.disabled = true;
+  try {
+    await api("/api/queue/retry", { method: "POST", body: JSON.stringify({}) });
+    await loadQueue();  // refreshes counts; button hides itself when none remain
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 function isDownloadsTabActive() {
   return !document.getElementById("view-downloads").hidden;
