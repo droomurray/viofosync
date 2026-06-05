@@ -294,6 +294,9 @@ class SyncWorker:
         # we can emit clear signals only when a previously-set error
         # actually changes.
         self._last_error_kind: Optional[str] = None
+        # Last-known dashcam reachability, so online/offline is logged
+        # on transition rather than every cycle. None = unknown.
+        self._online: Optional[bool] = None
 
     # ---- lifecycle ----
 
@@ -315,6 +318,7 @@ class SyncWorker:
                     "call bind_loop() during app startup"
                 )
         self._stop.clear()
+        log.info("sync worker started")
         # Schedule the coroutine onto the captured loop — works
         # both from the loop thread and from threadpool handlers.
         self._task = asyncio.run_coroutine_threadsafe(
@@ -335,6 +339,7 @@ class SyncWorker:
         return not self._task.done()
 
     async def stop(self) -> None:
+        log.info("sync worker stopped")
         self._stop.set()
         self._cancel_current.set()
         self._kick.set()
@@ -370,22 +375,26 @@ class SyncWorker:
         """Abort the in-flight download ASAP. Used when the
         reachability probe fails mid-download or the user
         presses Stop."""
+        log.info("aborting current download")
         self._cancel_current.set()
 
     def skip_current(self) -> None:
         """Cancel the in-flight download and move on to the
         next queue item. Unlike pause, the worker keeps running."""
+        log.info("skipping current download")
         self._cancel_current.set()
 
     def pause(self) -> None:
         """Pause the worker: finish the current chunk then stop
         picking new items. The current download is cancelled."""
+        log.info("sync paused")
         self._paused.set()
         self._cancel_current.set()
         self._broadcast_sync_state()
 
     def resume(self) -> None:
         """Unpause and kick the worker to pick up immediately."""
+        log.info("sync resumed")
         self._paused.clear()
         self._broadcast_sync_state()
         self.kick()
@@ -622,19 +631,36 @@ class SyncWorker:
             await self._clear_sync_error()
         return True
 
+    def _note_reachability(self, online: bool, source: str = "") -> None:
+        """Log dashcam online/offline only when it actually changes, so
+        the Logs tab records the transition without one line per cycle."""
+        if self._online == online:
+            return
+        self._online = online
+        if online:
+            log.info("dashcam online (%s)", source or "primary")
+        else:
+            log.info("dashcam offline")
+
     async def _cycle(self) -> bool:
+        # A paused worker does no dashcam work — no probe, no listing —
+        # so "sync paused" stays the last word in the log until resume.
+        if self._paused.is_set():
+            return False
         await self._emit_disk_pct()
         if not await self._check_recordings_writable():
             return False
         active, source = await self._select_active_address()
         self._active_address = active
         if active is not None:
+            self._note_reachability(True, source)
             await self.hub.broadcast({
                 "type": "dashcam_online",
                 "source": source,
                 "address": active,
             })
         else:
+            self._note_reachability(False)
             await self.hub.broadcast({"type": "dashcam_offline"})
             return False
 
@@ -805,11 +831,23 @@ class SyncWorker:
                         base_url=base,
                         sink=sink,
                     )
-                return ok, None
+                return ok, None, False
+            except vfs.DownloadCancelled:
+                # Deliberate abort (pause/stop/unreachable): not a
+                # failure, so the caller must not burn an attempt.
+                return False, None, True
             except Exception as e:
-                return False, str(e)
+                return False, str(e), False
 
-        ok, err = await loop.run_in_executor(None, _blocking)
+        ok, err, cancelled = await loop.run_in_executor(None, _blocking)
+
+        if cancelled:
+            # Return the item to pending with its attempt refunded so it
+            # picks up cleanly on resume. download_file already logged the
+            # cancellation at INFO — no need to repeat it here.
+            q.mark_cancelled(self.db, item.id)
+            q.emit_queue_changed(self.db, self.hub)
+            return False
 
         if ok:
             q.mark_done(self.db, item.id)

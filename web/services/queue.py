@@ -290,6 +290,25 @@ def mark_transient_failure(
     return new_state
 
 
+def mark_cancelled(db: Database, item_id: int) -> None:
+    """Return a deliberately-interrupted download (user pause/stop, or
+    lost reachability) to ``pending`` without counting it as a failed
+    attempt.
+
+    ``mark_downloading`` bumps ``attempts`` on pickup; hand that
+    increment back so a pause can't silently exhaust the retry budget.
+    Mirrors ``reconcile_orphan_downloads`` — an interrupted download is
+    not a failed one.
+    """
+    with db.write() as c:
+        c.execute(
+            "UPDATE download_queue SET state='pending', "
+            "started_at=NULL, attempts=MAX(attempts-1, 0), "
+            "last_error=NULL WHERE id=?",
+            (item_id,),
+        )
+
+
 def list_all(db: Database, limit: int = 500) -> List[dict]:
     with db.conn() as c:
         rows = c.execute(
