@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ..auth import require_csrf, require_session
 from ..services import gps as gps_service
-from ..services import scanner, thumbs
+from ..services import route_cache, scanner, thumbs
 
 log = logging.getLogger("viofosync.archive")
 
@@ -223,33 +223,10 @@ def get_day(
     return {"date": date, "clips": clips}
 
 
-@router.get("/day/{date}/route")
-def get_route(request: Request, date: str) -> dict:
-    """Merged GPS track for the day plus detected journeys."""
-    try:
-        _dt.date.fromisoformat(date)
-    except ValueError:
-        raise HTTPException(400, "bad date format")
-
-    with _db(request).conn() as c:
-        rows = c.execute(
-            """
-            SELECT path FROM clip_index
-            WHERE group_name = ? AND has_gpx = 1
-            ORDER BY timestamp ASC
-            """,
-            (date,),
-        ).fetchall()
-
-    gpx_paths = [r["path"] + ".gpx" for r in rows]
-    points, stops, journeys = gps_service.aggregate_day(gpx_paths)
-
-    # Synchronous cache lookup — no network. The UI fetches any
-    # uncached labels lazily via /geocode after first paint.
-    geocoder = getattr(request.app.state, "geocode", None)
-    def _lbl(lat, lon):
-        return geocoder.cache_lookup(lat, lon) if geocoder else None
-
+def _assemble_route(date: str, points, stops, journeys) -> dict:
+    """Build the route payload (no labels — those are applied on read so
+    they stay current as the geocode cache fills). This is the expensive-
+    to-produce part that gets cached."""
     return {
         "date": date,
         "point_count": len(points),
@@ -263,8 +240,8 @@ def get_route(request: Request, date: str) -> dict:
                 "start_lon": j.start_lon,
                 "end_lat": j.end_lat,
                 "end_lon": j.end_lon,
-                "start_label": _lbl(j.start_lat, j.start_lon),
-                "end_label": _lbl(j.end_lat, j.end_lon),
+                "start_label": None,
+                "end_label": None,
                 "distance_m": round(j.distance_m, 1),
                 "duration_s": int(
                     (j.end_time - j.start_time).total_seconds()
@@ -291,11 +268,59 @@ def get_route(request: Request, date: str) -> dict:
                 "duration_s": int(s.duration_s),
                 "lat": s.center_lat,
                 "lon": s.center_lon,
-                "label": _lbl(s.center_lat, s.center_lon),
+                "label": None,
             }
             for s in stops
         ],
     }
+
+
+def _apply_labels(payload: dict, geocoder) -> None:
+    """Fill journey/stop labels from the geocode cache (synchronous, no
+    network). Mutates ``payload`` in place. Uncached labels stay None and
+    are fetched lazily by the UI via /geocode after first paint."""
+    def _lbl(lat, lon):
+        return geocoder.cache_lookup(lat, lon) if geocoder else None
+    for j in payload.get("journeys", []):
+        j["start_label"] = _lbl(j["start_lat"], j["start_lon"])
+        j["end_label"] = _lbl(j["end_lat"], j["end_lon"])
+    for s in payload.get("stops", []):
+        s["label"] = _lbl(s["lat"], s["lon"])
+
+
+@router.get("/day/{date}/route")
+def get_route(request: Request, date: str) -> dict:
+    """Merged GPS track for the day plus detected journeys."""
+    try:
+        _dt.date.fromisoformat(date)
+    except ValueError:
+        raise HTTPException(400, "bad date format")
+
+    with _db(request).conn() as c:
+        rows = c.execute(
+            """
+            SELECT path FROM clip_index
+            WHERE group_name = ? AND has_gpx = 1
+            ORDER BY timestamp ASC
+            """,
+            (date,),
+        ).fetchall()
+
+    gpx_paths = [r["path"] + ".gpx" for r in rows]
+
+    # The GPX re-parse is the slow part (tens of seconds on a busy day) and
+    # only changes when the day's GPX files change, so cache it keyed by a
+    # signature of those files. Labels are applied after, on every request.
+    recordings = _settings(request).recordings
+    sig = route_cache.signature(gpx_paths)
+    payload = route_cache.load(recordings, date, sig)
+    if payload is None:
+        points, stops, journeys = gps_service.aggregate_day(gpx_paths)
+        payload = _assemble_route(date, points, stops, journeys)
+        route_cache.store(recordings, date, sig, payload)
+
+    _apply_labels(payload, getattr(request.app.state, "geocode", None))
+    return payload
 
 
 @router.get("/geocode")
