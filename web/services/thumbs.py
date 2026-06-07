@@ -26,6 +26,44 @@ def thumb_path(recordings: str, clip_id: int) -> str:
     return os.path.join(_cache_dir(recordings), f"{clip_id}.jpg")
 
 
+def fail_marker_path(recordings: str, clip_id: int) -> str:
+    return os.path.join(_cache_dir(recordings), f"{clip_id}.jpg.fail")
+
+
+def mark_failed(recordings: str, clip_id: int) -> None:
+    """Record that thumbnail extraction failed for this clip, so the
+    sweep doesn't re-run ffmpeg on it every pass. Cleared automatically
+    once the source file changes (see :func:`failed_recently`)."""
+    try:
+        with open(fail_marker_path(recordings, clip_id), "w"):
+            pass
+    except OSError:  # pragma: no cover — best-effort cache
+        pass
+
+
+def _clear_failed(recordings: str, clip_id: int) -> None:
+    try:
+        os.remove(fail_marker_path(recordings, clip_id))
+    except OSError:
+        pass
+
+
+def failed_recently(recordings: str, clip_id: int, video_path: str) -> bool:
+    """True if a prior thumbnail attempt failed and the source file
+    hasn't changed since. A marker older than the video (the clip was
+    rewritten — e.g. a partial import got redone) is treated as stale,
+    so the thumb is worth another attempt."""
+    marker = fail_marker_path(recordings, clip_id)
+    try:
+        marker_mtime = os.path.getmtime(marker)
+    except OSError:
+        return False
+    try:
+        return marker_mtime >= os.path.getmtime(video_path)
+    except OSError:  # video gone — let the caller's isfile check handle it
+        return False
+
+
 async def ensure_thumb(
     recordings: str, clip_id: int, video_path: str
 ) -> Optional[str]:
@@ -58,8 +96,11 @@ async def ensure_thumb(
         await asyncio.wait_for(proc.wait(), timeout=15.0)
     except asyncio.TimeoutError:
         proc.kill()
+        mark_failed(recordings, clip_id)
         return None
 
     if proc.returncode != 0 or not os.path.exists(out):
+        mark_failed(recordings, clip_id)
         return None
+    _clear_failed(recordings, clip_id)
     return out

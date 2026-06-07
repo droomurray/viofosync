@@ -238,6 +238,11 @@ async def sweep_missing_thumbs(
         thumb_file = thumbs.thumb_path(recordings, row["id"])
         if os.path.exists(thumb_file) and os.path.getsize(thumb_file) > 0:
             continue
+        # A clip that already failed extraction (corrupt/too-short/partial)
+        # is skipped until its file changes, so the sweep doesn't re-spawn
+        # ffmpeg on the same un-thumbable clips every cycle.
+        if thumbs.failed_recently(recordings, row["id"], row["path"]):
+            continue
         todo.append((row["id"], row["path"]))
 
     if not todo:

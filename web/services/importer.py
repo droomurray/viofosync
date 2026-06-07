@@ -131,6 +131,43 @@ def dest_for(snap, item: ScanItem) -> str:
     return vfs.get_filepath(snap.recordings, group or "", item.basename)
 
 
+def has_complete_copy(dest: str, expected_size: int) -> bool:
+    """True if ``dest`` already holds a non-partial copy: it exists and is
+    not smaller than ``expected_size``. A smaller file is treated as a
+    truncated/partial import and redone; an unknown size (<= 0) trusts mere
+    existence. Larger-than-expected files are kept, never clobbered."""
+    if not os.path.exists(dest):
+        return False
+    if expected_size and expected_size > 0:
+        try:
+            return os.path.getsize(dest) >= expected_size
+        except OSError:
+            return False
+    return True
+
+
+def present_in_archive(snap, sizes) -> set[str]:
+    """Return the subset of names that already have a COMPLETE copy in the
+    archive. ``sizes`` maps basename -> expected size in bytes (0/unknown
+    trusts existence). Unrecognised / unparseable names are ignored. Lets
+    the import flow skip clips already there instead of re-uploading or
+    re-scanning them, while still redoing truncated partials."""
+    out: set[str] = set()
+    for name, size in sizes.items():
+        m = vfs.downloaded_filename_re.match(name)
+        if not m:
+            continue
+        try:
+            item = scan_item_from_match(
+                m, name, source_rel_path=name, size=size or 0, src_path="",
+            )
+        except ValueError:
+            continue
+        if has_complete_copy(dest_for(snap, item), size or 0):
+            out.add(name)
+    return out
+
+
 def _origin_source_dir(item: ScanItem) -> str:
     # Invariant: contains "/RO/" iff the clip is locked, so scanner.scan
     # re-derives event_type='ro' on every future rescan.
@@ -140,11 +177,16 @@ def _origin_source_dir(item: ScanItem) -> str:
 def _record_origin(db: Database, item: ScanItem) -> None:
     now = int(time.time())
     with db.write() as c:
+        # On conflict the clip was already queued (e.g. the dashcam listed
+        # it before this bulk import). Flip that row to done so the next
+        # Wi-Fi cycle doesn't re-attempt a download that 404s.
         c.execute(
-            "INSERT OR IGNORE INTO download_queue "
+            "INSERT INTO download_queue "
             "(filename, source_dir, remote_size, recorded_at, camera, "
             " event_type, state, priority, enqueued_at, finished_at, manual) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'done', 0, ?, ?, 1)",
+            "VALUES (?, ?, ?, ?, ?, ?, 'done', 0, ?, ?, 1) "
+            "ON CONFLICT(filename) DO UPDATE SET "
+            "  state='done', finished_at=excluded.finished_at, manual=1",
             (item.basename, _origin_source_dir(item), item.size_bytes,
              item.timestamp, item.camera, item.event_type, now, now),
         )
@@ -166,7 +208,7 @@ def ingest_clip(
     (the upload path); we then go straight to the final rename."""
     recordings = snap.recordings
     dest = dest_for(snap, item)
-    if os.path.exists(dest):
+    if has_complete_copy(dest, item.size_bytes):
         return ClipResult(item.basename, "already_present",
                           size_bytes=item.size_bytes, event_type=item.event_type)
 

@@ -3129,10 +3129,31 @@ window.addEventListener("hashchange", () => {
   $("import-upload-go").addEventListener("click", async () => {
     show($("import-progress")); hide($("import-summary"));
     const tally = {};
-    for (let i = 0; i < picked.length; i++) {
-      const { file, path } = picked[i];
-      $("import-status").textContent = `Uploading ${file.name} (${i + 1}/${picked.length})`;
-      $("import-bar").style.width = `${(i / picked.length) * 100}%`;
+
+    // Ask the server which clips are already in the archive and drop them
+    // up front, so they're never re-uploaded.
+    let queue = picked;
+    try {
+      $("import-status").textContent = "Checking for clips already imported…";
+      const r = await fetch("/api/import/present", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { ...csrfH(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          files: picked.map((p) => ({ name: p.file.name, size: p.file.size })),
+        }),
+      });
+      if (r.ok) {
+        const present = new Set((await r.json()).present || []);
+        queue = picked.filter((p) => !present.has(p.file.name));
+        if (present.size) tally.already_present = present.size;
+      }
+    } catch (_) { /* fall back to uploading everything */ }
+
+    for (let i = 0; i < queue.length; i++) {
+      const { file, path } = queue[i];
+      $("import-status").textContent = `Uploading ${file.name} (${i + 1}/${queue.length})`;
+      $("import-bar").style.width = `${(i / queue.length) * 100}%`;
       let res;
       try {
         const r = await fetch("/api/import/upload", {
@@ -3179,8 +3200,12 @@ window.addEventListener("hashchange", () => {
       return;
     }
     const m = await r.json();
+    const newCount = m.recognised.length - (m.present_count || 0);
+    const dupNote = m.present_count
+      ? `${newCount} new, ${m.present_count} already in archive, `
+      : `${m.recognised.length} clip(s), `;
     $("import-folder-manifest").textContent =
-      `${m.recognised.length} clip(s), ${m.skipped.length} skipped, ` +
+      `${dupNote}${m.skipped.length} skipped, ` +
       `${(m.total_bytes / 1e9).toFixed(2)} GB${m.cross_volume ? " (external — copy)" : ""}.`;
     $("import-folder-go").dataset.path = path || "";
     show($("import-folder-go"));

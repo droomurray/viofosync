@@ -102,6 +102,16 @@ def reconcile(
                         ),
                     )
                     marked_done += 1
+                elif existing[filename]["state"] in ("pending", "failed"):
+                    # The clip got onto disk by another path (bulk import,
+                    # manual copy) after it was queued. Heal the stale row
+                    # instead of re-downloading a file we already have.
+                    c.execute(
+                        "UPDATE download_queue SET state='done', "
+                        "finished_at=? WHERE filename=?",
+                        (now, filename),
+                    )
+                    marked_done += 1
                 continue
 
             if filename in existing:

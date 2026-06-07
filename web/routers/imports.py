@@ -32,6 +32,15 @@ class _PathBody(BaseModel):
     path: str | None = None
 
 
+class _FileRef(BaseModel):
+    name: str
+    size: int = 0
+
+
+class _FilesBody(BaseModel):
+    files: list[_FileRef] = []
+
+
 def _db(request: Request):
     return request.app.state.db
 
@@ -54,13 +63,32 @@ def scan(request: Request, body: _PathBody) -> dict:
     if not os.path.isdir(root):
         raise HTTPException(400, f"not a readable directory: {root}")
     man = importer.scan_source(root)
+    present = importer.present_in_archive(
+        snap, {it.basename: it.size_bytes for it in man.items},
+    )
+    recognised = []
+    for it in man.items:
+        d = importer.scan_item_dict(it)
+        d["present"] = it.basename in present
+        recognised.append(d)
     return {
         "path": root,
         "cross_volume": importer.is_cross_volume(root, snap.recordings),
         "total_bytes": man.total_bytes,
-        "recognised": [importer.scan_item_dict(it) for it in man.items],
+        "present_count": len(present),
+        "recognised": recognised,
         "skipped": man.skipped,
     }
+
+
+@router.post("/present", dependencies=[Depends(require_csrf)])
+def present(request: Request, body: _FilesBody) -> dict:
+    """Report which clips already have a complete copy in the archive, so
+    the browser-upload tab can skip re-sending them. Size-matched: a
+    truncated archive copy is reported absent so the upload redoes it."""
+    snap = _snap(request)
+    sizes = {f.name: f.size for f in body.files}
+    return {"present": sorted(importer.present_in_archive(snap, sizes))}
 
 
 @router.post("/ingest", dependencies=[Depends(require_csrf)])
@@ -111,7 +139,7 @@ async def upload(request: Request) -> dict:
         m, name, source_rel_path=rel, size=size, src_path="",
     )
     dest = importer.dest_for(snap, item)
-    if os.path.exists(dest):
+    if importer.has_complete_copy(dest, item.size_bytes):
         return {"status": "already_present", "filename": name}
 
     # Evict to fit BEFORE writing bytes (size known from the header).
