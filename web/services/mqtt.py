@@ -254,6 +254,31 @@ class MqttService:
             except aiomqtt.MqttError as e:
                 log.warning("mqtt: connection lost (%s); reconnecting", e)
                 self._set_state(ConnState.RECONNECTING, detail=str(e))
+            except BaseExceptionGroup as eg:
+                # _connect_and_loop runs its workers in an asyncio.TaskGroup,
+                # which reports a task failure as an ExceptionGroup — never
+                # the bare error. A routine broker disconnect therefore
+                # arrives here wrapped (e.g. an aiomqtt.MqttError
+                # "Disconnected during message iteration"); the old
+                # `except aiomqtt.MqttError` missed the group, so a normal
+                # reconnect was logged as a fatal "unexpected error" with the
+                # state set to ERROR instead of RECONNECTING. Cancellation is
+                # normally delivered bare (caught above), but honour it here
+                # too so shutdown is never swallowed as an error.
+                cancelled, eg = eg.split(asyncio.CancelledError)
+                if cancelled is not None:
+                    raise asyncio.CancelledError
+                mqtt_errs, others = eg.split(aiomqtt.MqttError)
+                if others is None:
+                    msg = "; ".join(str(e) for e in mqtt_errs.exceptions)
+                    log.warning("mqtt: connection lost (%s); reconnecting", msg)
+                    self._set_state(ConnState.RECONNECTING, detail=msg)
+                else:
+                    log.error("mqtt: unexpected error", exc_info=others)
+                    self._set_state(
+                        ConnState.ERROR,
+                        detail="; ".join(str(e) for e in others.exceptions),
+                    )
             except Exception as e:
                 log.exception("mqtt: unexpected error")
                 self._set_state(ConnState.ERROR, detail=str(e))
