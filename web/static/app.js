@@ -20,7 +20,6 @@ const state = {
   filters: { driving: true, parking: true, ro: true },
   showMaps: localStorage.getItem("vfs.showMaps") !== "0",
   archiveSelected: new Map(),  // pair_id → { ts, front, rear }
-  archiveRefreshTimer: null,
   map: null,
   routeLayer: null,
   ws: null,
@@ -255,15 +254,11 @@ function routeTo(hash) {
   if (tab === "archive") {
     loadDays();
     refreshExportJobs();
-    startArchiveAutoRefresh();
-  } else {
-    stopArchiveAutoRefresh();
   }
   if (tab === "downloads") loadQueue();
   if (tab === "logs") loadLogs();
   if (tab === "settings") loadSettings();
   if (tab === "timeline") {
-    stopArchiveAutoRefresh();
     // "#/timeline/<date>/<journeyIdx?>" — segments after the tab.
     const segs = stripped.split("/");
     const date = segs[1] || "";
@@ -273,31 +268,22 @@ function routeTo(hash) {
   }
 }
 
-// Periodic rescan + reload so freshly downloaded clips appear
-// without a manual refresh. Rescan is cheap (UPSERT per file).
-async function autoRefreshArchive() {
+// Refresh the day list when the server re-indexes the archive. The
+// backend already broadcasts a `clip_indexed` WS event on every scan
+// (sync-worker download, startup scan, manual rescan, import), so we
+// reload on that push instead of polling. Guarded so we don't disrupt
+// the user: skip while the archive view is hidden, and skip while a day
+// is expanded — re-rendering would collapse the open card, reset its
+// map, and drop any unsubmitted selections.
+//
+// This replaces an earlier 30s client-side poll that issued a full
+// `/api/archive/rescan` (walking the whole recordings tree) from every
+// open tab — so N open archive clients meant N full rescans per tick.
+// The work is the server's to do once; the browser just reacts to it.
+function refreshArchiveOnIndexChange() {
   if (document.getElementById("view-archive").hidden) return;
-  // Skip while the user has a day expanded — re-rendering would
-  // collapse the card, reset the map, and drop any unsubmitted
-  // selections.
-  const expanded = document.querySelector(
-    "#days .day .day-body:not([hidden])",
-  );
-  if (expanded) return;
-  try { await api("/api/archive/rescan", { method: "POST" }); }
-  catch { /* non-fatal */ }
-  await loadDays();
-}
-
-function startArchiveAutoRefresh() {
-  stopArchiveAutoRefresh();
-  state.archiveRefreshTimer = setInterval(autoRefreshArchive, 30000);
-}
-function stopArchiveAutoRefresh() {
-  if (state.archiveRefreshTimer) {
-    clearInterval(state.archiveRefreshTimer);
-    state.archiveRefreshTimer = null;
-  }
+  if (document.querySelector("#days .day .day-body:not([hidden])")) return;
+  loadDays();
 }
 
 // ---------- Archive ----------
@@ -2236,6 +2222,13 @@ function handleEvent(ev) {
     updateSyncState(status);
   };
   switch (ev.type) {
+    case "clip_indexed":
+      // Server re-indexed (download landed, manual rescan, import, or
+      // startup scan) and pushed this. Cheap read-only refresh — the
+      // scan already happened server-side, and this fires only on real
+      // changes, not on a timer.
+      refreshArchiveOnIndexChange();
+      break;
     case "snapshot":
       if (ev.state.sync_status) {
         applyStatus(ev.state.sync_status, ev.state.sync_status_reason);
