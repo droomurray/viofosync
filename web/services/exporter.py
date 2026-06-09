@@ -44,6 +44,7 @@ class _ExportCancelled(Exception):
 
 from ..db import Database
 from ..settings import SettingsProvider
+from . import export_preview
 from .naming import channel_of
 
 log = logging.getLogger("viofosync.exporter")
@@ -650,6 +651,22 @@ class ExportWorker:
                 }
             )
         )
+        if ok and output_path:
+            asyncio.create_task(
+                self._make_export_preview(job_id, output_path)
+            )
+
+    async def _make_export_preview(self, job_id: int, output_path: str) -> None:
+        """Generate the job's filmstrip preview once, after it finishes, so the
+        HTTP endpoint only ever serves a cached file (no request-time ffmpeg).
+        Best-effort: a failure here must never affect the export itself."""
+        try:
+            recordings = self._provider.get().recordings
+            await export_preview.ensure_export_preview(
+                recordings, job_id, output_path, None,
+            )
+        except Exception:  # pragma: no cover - best-effort
+            log.exception("export preview generation failed for job %d", job_id)
 
     def _fetch_clips(self, clip_ids: List[int]) -> List[dict]:
         ph = ",".join("?" * len(clip_ids))

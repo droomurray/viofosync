@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from ..auth import require_csrf, require_session
+from ..services import export_preview
 from ..services.naming import export_download_name, parse_clip_ids
+
+# 1x1 transparent PNG — served when a preview can't be produced (job not done,
+# unknown, or generation failed), so the <img> degrades cleanly.
+_PLACEHOLDER_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+    b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    b"\x00\x00\x00\rIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+    b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 router = APIRouter(
     prefix="/api/exports",
@@ -162,6 +173,23 @@ def download(job_id: int, request: Request):
     )
 
 
+@router.get("/{job_id}/filmstrip.jpg")
+async def filmstrip_jpg(job_id: int, request: Request):
+    # Serve-only: the preview is generated once by the export worker when the
+    # job finishes (see ExportWorker._make_export_preview). We never generate
+    # at request time — doing so caused a CPU storm when the jobs table
+    # re-rendered on every progress tick. Missing preview -> placeholder.
+    recordings = request.app.state.settings_provider.get().recordings
+    sp = export_preview.preview_path(recordings, job_id)
+    if os.path.exists(sp) and os.path.getsize(sp) > 0:
+        return FileResponse(
+            sp,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+    return Response(content=_PLACEHOLDER_PNG, media_type="image/png")
+
+
 @router.delete("/{job_id}", dependencies=[Depends(require_csrf)])
 async def delete(job_id: int, request: Request) -> dict:
     # If this is the job currently rendering, kill its ffmpeg first so we
@@ -182,6 +210,11 @@ async def delete(job_id: int, request: Request) -> dict:
             except OSError:
                 pass
         c.execute("DELETE FROM export_jobs WHERE id=?", (job_id,))
+    recordings = request.app.state.settings_provider.get().recordings
+    pv = export_preview.preview_path(recordings, job_id)
+    with contextlib.suppress(OSError):
+        if os.path.exists(pv):
+            os.remove(pv)
     return {"ok": True}
 
 

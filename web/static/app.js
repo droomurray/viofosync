@@ -1266,6 +1266,7 @@ function renderExportJobs(jobs) {
   table.className = "exports-table";
   table.innerHTML = `
     <thead><tr>
+      <th class="export-preview-col"></th>
       <th>Type</th><th>Status</th><th>Footage</th>
       <th class="exports-actions-col"></th>
     </tr></thead>
@@ -1345,7 +1346,16 @@ function renderExportJobs(jobs) {
       `data-id="${j.id}" title="Delete" aria-label="Delete export">` +
       `${EXPORT_ICON_TRASH}</button>`;
 
+    // Filmstrip preview: a static first frame for finished jobs that scrubs
+    // through the export on hover (pure CSS). Non-done rows get an empty cell
+    // of the same size so the columns stay aligned.
+    const previewCell = j.state === "done"
+      ? `<div class="export-thumb" title="Preview" ` +
+        `style="background-image:url(/api/exports/${j.id}/filmstrip.jpg)"></div>`
+      : `<div class="export-thumb export-thumb--empty" aria-hidden="true"></div>`;
+
     tr.innerHTML = `
+      <td class="export-preview">${previewCell}</td>
       <td>${typeCell}</td>
       <td class="export-status">${statusCell}</td>
       <td class="export-footage">${footageCell}</td>

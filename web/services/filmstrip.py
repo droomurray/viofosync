@@ -82,7 +82,7 @@ def _semaphore() -> asyncio.Semaphore:
     return sem
 
 
-def _extract_cmd(ffmpeg: str, video_path: str, ts: int, out: str) -> list[str]:
+def _extract_cmd(ffmpeg: str, video_path: str, ts: float, out: str) -> list[str]:
     """ffmpeg argv to grab one scaled frame near ``ts`` seconds.
 
     Input seeking (``-ss`` *before* ``-i``) jumps to the nearest keyframe via
@@ -134,30 +134,40 @@ async def _run_ffmpeg(cmd: list[str], timeout: float) -> int | None:
     return proc.returncode
 
 
-async def _generate_sprite(
-    ffmpeg: str, video_path: str, sprite: str, frames: int
+async def generate_sprite_at(
+    ffmpeg: str, video_path: str, sprite: str, timestamps: list[float],
 ) -> bool:
-    """Seek to each tile's timestamp, extract one scaled frame, then stitch
-    them into ``sprite``. Returns True on success. Extractions run
-    sequentially so a single sprite uses one ffmpeg at a time (the caller's
-    semaphore bounds how many sprites run at once)."""
+    """Extract one scaled frame at each timestamp (seconds) and stitch them
+    into ``sprite`` — a horizontal montage, one tile per timestamp. Returns
+    True on success. Shared by the clip filmstrip (interval-spaced timestamps)
+    and the export preview (N evenly-spaced timestamps). Extractions run
+    sequentially so one sprite uses one ffmpeg at a time; the caller's
+    semaphore bounds how many sprites run at once."""
     tiles_dir = tempfile.mkdtemp(prefix=".tiles_", dir=os.path.dirname(sprite))
     try:
-        for i in range(frames):
+        for i, ts in enumerate(timestamps):
             tile = os.path.join(tiles_dir, f"f{i:04d}.jpg")
             rc = await _run_ffmpeg(
-                _extract_cmd(ffmpeg, video_path, i * INTERVAL_S, tile),
-                _FFMPEG_TIMEOUT_S,
+                _extract_cmd(ffmpeg, video_path, ts, tile), _FFMPEG_TIMEOUT_S,
             )
             if rc != 0 or not (os.path.exists(tile) and os.path.getsize(tile) > 0):
                 return False
         pattern = os.path.join(tiles_dir, "f%04d.jpg")
         rc = await _run_ffmpeg(
-            _tile_cmd(ffmpeg, pattern, frames, sprite), _FFMPEG_TIMEOUT_S
+            _tile_cmd(ffmpeg, pattern, len(timestamps), sprite), _FFMPEG_TIMEOUT_S,
         )
         return rc == 0 and os.path.exists(sprite) and os.path.getsize(sprite) > 0
     finally:
         shutil.rmtree(tiles_dir, ignore_errors=True)
+
+
+async def _generate_sprite(
+    ffmpeg: str, video_path: str, sprite: str, frames: int
+) -> bool:
+    """Interval-spaced montage (one frame per ``INTERVAL_S`` of clip), used by
+    the clip filmstrip. Thin wrapper over :func:`generate_sprite_at`."""
+    timestamps = [i * INTERVAL_S for i in range(frames)]
+    return await generate_sprite_at(ffmpeg, video_path, sprite, timestamps)
 
 
 def _read_cached_meta(mp: str) -> FilmstripMeta | None:

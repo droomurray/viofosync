@@ -207,3 +207,50 @@ def test_qsv_probe_command_exercises_mfx(monkeypatch):
     assert "-init_hw_device" in cmd and "qsv=hw" in cmd
     assert any("scale_qsv" in c for c in cmd)
     assert "h264_qsv" in cmd
+
+
+async def test_finish_ok_schedules_export_preview(db, monkeypatch):
+    import asyncio
+    from web.services import export_preview
+
+    calls = []
+
+    async def fake_ensure(recordings, job_id, output_path, duration_s):
+        calls.append((job_id, output_path))
+        return None
+
+    monkeypatch.setattr(export_preview, "ensure_export_preview", fake_ensure)
+
+    # A job row to update.
+    with db.write() as c:
+        c.execute(
+            "INSERT INTO export_jobs (id, type, clip_ids, state, created_at) "
+            "VALUES (5, 'join_front', '[1]', 'running', 0)"
+        )
+
+    worker = ExportWorker(db=db, provider=MagicMock(), broadcast=_noop)
+    worker._finish(5, True, None, "/recordings/.exports/5.mp4")
+    await asyncio.sleep(0)  # let the scheduled task run
+    assert calls == [(5, "/recordings/.exports/5.mp4")]
+
+
+async def test_finish_failure_does_not_schedule_preview(db, monkeypatch):
+    import asyncio
+    from web.services import export_preview
+
+    calls = []
+
+    async def fake_ensure(recordings, job_id, output_path, duration_s):
+        calls.append(job_id)
+        return None
+
+    monkeypatch.setattr(export_preview, "ensure_export_preview", fake_ensure)
+    with db.write() as c:
+        c.execute(
+            "INSERT INTO export_jobs (id, type, clip_ids, state, created_at) "
+            "VALUES (6, 'join_front', '[1]', 'running', 0)"
+        )
+    worker = ExportWorker(db=db, provider=MagicMock(), broadcast=_noop)
+    worker._finish(6, False, "boom", None)
+    await asyncio.sleep(0)
+    assert calls == []

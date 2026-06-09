@@ -273,3 +273,37 @@ async def test_missing_ffmpeg_warns_once(tmp_path: Path, monkeypatch, caplog):
         if "ffmpeg not found" in r.getMessage()
     ]
     assert len(no_ffmpeg) == 1   # warned once, not once-per-clip
+
+
+async def test_generate_sprite_at_extracts_given_timestamps(tmp_path, monkeypatch):
+    from pathlib import Path
+    seen = []
+
+    async def fake_run(cmd, timeout):
+        if "-ss" in cmd:
+            seen.append(cmd[cmd.index("-ss") + 1])
+        Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")  # tiny JPEG-ish
+        return 0
+
+    monkeypatch.setattr(filmstrip, "_run_ffmpeg", fake_run)
+    ok = await filmstrip.generate_sprite_at(
+        "ffmpeg", "in.mp4", str(tmp_path / "s.jpg"), [1.5, 3.0, 4.5])
+    assert ok is True
+    assert seen == ["1.5", "3.0", "4.5"]
+
+
+async def test_generate_sprite_keeps_interval_timestamps(tmp_path, monkeypatch):
+    # Regression: the clip filmstrip must still seek at i*INTERVAL_S.
+    from pathlib import Path
+    seen = []
+
+    async def fake_run(cmd, timeout):
+        if "-ss" in cmd:
+            seen.append(cmd[cmd.index("-ss") + 1])
+        Path(cmd[-1]).write_bytes(b"\xff\xd8\xff\xd9")
+        return 0
+
+    monkeypatch.setattr(filmstrip, "_run_ffmpeg", fake_run)
+    ok = await filmstrip._generate_sprite("ffmpeg", "in.mp4", str(tmp_path / "s.jpg"), 4)
+    assert ok is True
+    assert seen == ["0", "8", "16", "24"]  # INTERVAL_S == 8

@@ -2080,3 +2080,27 @@ main {
   text-align: right;
 }
 #tl-shortcuts dd { margin: 0; }
+
+/* Export-job filmstrip preview: one 16:9 tile, scrubs through a 10-frame
+   sprite on hover. Sprite is 10 tiles wide, so background-size:1000% shows
+   exactly one tile; the keyframes step background-position across all 10. */
+.export-preview-col { width: 136px; }
+.export-thumb {
+  width: 128px;
+  height: 72px;
+  border-radius: 4px;
+  background-color: #000;
+  background-repeat: no-repeat;
+  background-size: 1000% 100%;
+  background-position: 0 0;
+}
+.export-thumb:hover {
+  animation: export-scrub 1.2s steps(10, jump-none) infinite;
+}
+.export-thumb--empty {
+  background: none;
+}
+@keyframes export-scrub {
+  from { background-position-x: 0%; }
+  to   { background-position-x: 100%; }
+}
