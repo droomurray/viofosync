@@ -2044,3 +2044,39 @@ main {
 .tl-track-toggle.on::after { left: 12px; }
 .tl-track-head { display: flex; align-items: center; gap: 6px; flex: none;
   width: var(--tl-label-w); padding-left: 8px; }
+
+/* Timeline keyboard-shortcuts cheat-sheet (toggled with "?") */
+#tl-shortcuts {
+  position: fixed;
+  inset: 0;
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+#tl-shortcuts[hidden] { display: none; }
+#tl-shortcuts .tl-sc-card {
+  background: var(--panel, #1e1e24);
+  color: var(--text, #f0f0f0);
+  border: 1px solid var(--border, #3a3a44);
+  border-radius: 10px;
+  padding: 20px 24px;
+  min-width: 280px;
+  max-width: 90vw;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+#tl-shortcuts h3 { margin: 0 0 12px; font-size: 1.05rem; }
+#tl-shortcuts dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 18px;
+  margin: 0;
+}
+#tl-shortcuts dt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: right;
+}
+#tl-shortcuts dd { margin: 0; }

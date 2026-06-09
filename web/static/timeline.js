@@ -988,6 +988,93 @@
     if (r) r.hidden = !present.has("rear");
   }
 
+  // Editor keyboard shortcuts — one source of truth. Each entry drives three
+  // things so they never drift: the keydown dispatch (handleShortcut), the
+  // button tooltips (applyShortcutTooltips), and the "?" cheat-sheet
+  // (buildShortcutHelp). `match(e)` decides if the entry fires; `run(e)`
+  // performs it. `btn`/`keyLabel`/`label` feed tooltips + the help list.
+  const SHORTCUTS = [
+    { keyLabel: "Space", label: "Play / pause", btn: "tl-play",
+      match: (e) => e.code === "Space", run: togglePlay },
+    { keyLabel: "I", label: "Set Start", btn: "tl-in",
+      match: (e) => e.key.toLowerCase() === "i", run: setIn },
+    { keyLabel: "O", label: "Set End", btn: "tl-out",
+      match: (e) => e.key.toLowerCase() === "o", run: setOut },
+    { keyLabel: "S", label: "Insert switch point", btn: "tl-switch",
+      match: (e) => e.key.toLowerCase() === "s", run: addSwitchAtPlayhead },
+    { keyLabel: "C", label: "Cycle segment camera", btn: "tl-cam",
+      match: (e) => e.key.toLowerCase() === "c",
+      run: () => cycleSegmentCamera(segAt(state.playheadTs)) },
+    { keyLabel: "← / →", label: "Seek 1s (Shift = 10s)",
+      match: (e) => e.key === "ArrowLeft" || e.key === "ArrowRight",
+      run: (e) => seekToTs(
+        state.playheadTs
+        + (e.key === "ArrowLeft" ? -1 : 1) * (e.shiftKey ? 10 : 1)) },
+    { keyLabel: "+", label: "Zoom in", btn: "tl-zoom-in",
+      match: (e) => e.key === "+" || e.key === "=",
+      run: () => zoomBy(1.4, state.playheadTs) },
+    { keyLabel: "−", label: "Zoom out", btn: "tl-zoom-out",
+      match: (e) => e.key === "-",
+      run: () => zoomBy(1 / 1.4, state.playheadTs) },
+    { keyLabel: "?", label: "Keyboard shortcuts",
+      match: (e) => e.key === "?", run: () => toggleShortcutHelp() },
+  ];
+
+  function handleShortcut(e) {
+    if (el("view-timeline").hidden) return;
+    const t = e.target;
+    if (t && typeof t.closest === "function"
+        && t.closest("input, textarea, select")) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (shortcutHelpOpen()) {
+      if (e.key === "Escape" || e.key === "?") {
+        e.preventDefault();
+        toggleShortcutHelp(false);
+      }
+      return;   // swallow everything else while the help is open
+    }
+    for (const sc of SHORTCUTS) {
+      if (sc.match(e)) { e.preventDefault(); sc.run(e); return; }
+    }
+  }
+
+  // Surface each shortcut on its button's hover tooltip, e.g. "Set Start (I)".
+  // Driven by the same SHORTCUTS list so the label and key never disagree.
+  function applyShortcutTooltips() {
+    for (const sc of SHORTCUTS) {
+      if (!sc.btn) continue;
+      const b = el(sc.btn);
+      if (b) b.title = `${sc.label} (${sc.keyLabel})`;
+    }
+  }
+
+  // "?" cheat-sheet overlay. Built once from SHORTCUTS so it always matches
+  // the live key map. Dismissed by "?", Esc, or clicking the dimmed backdrop.
+  let helpEl = null;
+  function buildShortcutHelp() {
+    if (helpEl) return;
+    helpEl = document.createElement("div");
+    helpEl.id = "tl-shortcuts";
+    helpEl.hidden = true;
+    const rows = SHORTCUTS
+      .map((s) => `<dt>${s.keyLabel}</dt><dd>${s.label}</dd>`)
+      .join("") + "<dt>Esc</dt><dd>Close this help</dd>";
+    helpEl.innerHTML =
+      '<div class="tl-sc-card" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">'
+      + "<h3>Keyboard shortcuts</h3><dl>" + rows + "</dl></div>";
+    el("view-timeline").appendChild(helpEl);
+    // Click on the dim backdrop (but not the card) closes it.
+    helpEl.addEventListener("click", (e) => {
+      if (e.target === helpEl) toggleShortcutHelp(false);
+    });
+  }
+  function shortcutHelpOpen() { return !!helpEl && !helpEl.hidden; }
+  function toggleShortcutHelp(force) {
+    buildShortcutHelp();
+    const show = force == null ? helpEl.hidden : force;
+    helpEl.hidden = !show;
+  }
+
   function wireEditor() {
     if (editorWired) return;
     editorWired = true;
@@ -1009,14 +1096,10 @@
       const tg = e.target.closest(".tl-track-toggle");
       if (tg && tg.dataset.ch) { e.stopPropagation(); toggleChannel(tg.dataset.ch); }
     });
-    // Space toggles play/pause while the timeline is open.
-    document.addEventListener("keydown", (e) => {
-      if (el("view-timeline").hidden) return;
-      const t = e.target;
-      if (t && typeof t.closest === "function"
-          && t.closest("input, textarea, select")) return;
-      if (e.code === "Space") { e.preventDefault(); togglePlay(); }
-    });
+    // Editor keyboard shortcuts (see SHORTCUTS above).
+    document.addEventListener("keydown", handleShortcut);
+    applyShortcutTooltips();
+    buildShortcutHelp();
   }
 
   // Tear down playback when leaving the view — a hidden <video> keeps
