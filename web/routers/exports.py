@@ -120,15 +120,26 @@ def list_jobs(request: Request) -> JSONResponse:
         rows = c.execute(
             "SELECT id, type, state, progress, error, "
             "created_at, started_at, finished_at, "
-            "clip_start, clip_end, clip_ids "
+            "clip_start, clip_end, clip_ids, "
+            "output_size, output_duration_s "
             "FROM export_jobs ORDER BY created_at DESC LIMIT 100"
         ).fetchall()
+    recordings = request.app.state.settings_provider.get().recordings
     jobs = []
     for r in rows:
         job = dict(r)
         # clip_count is derived from the always-present clip_ids; the
         # raw id list isn't useful to the UI, so swap it out.
         job["clip_count"] = len(parse_clip_ids(job.pop("clip_ids")))
+        # Whether the filmstrip sprite has been generated yet. The worker
+        # builds it after the job finishes, so a freshly-done job has none —
+        # the UI shows a "generating" placeholder until this flips true.
+        sp = export_preview.preview_path(recordings, job["id"])
+        job["has_preview"] = (
+            job["state"] == "done"
+            and os.path.exists(sp)
+            and os.path.getsize(sp) > 0
+        )
         jobs.append(job)
     return JSONResponse({"jobs": jobs})
 
@@ -171,6 +182,27 @@ def download(job_id: int, request: Request):
         media_type="video/mp4",
         filename=filename,
     )
+
+
+@router.get("/{job_id}/video")
+def video(job_id: int, request: Request):
+    """Stream the export output for in-page playback. Unlike ``download``
+    this sets no ``filename=`` (no attachment disposition), so a <video>
+    element plays it inline; Starlette's FileResponse honours Range
+    requests for seeking."""
+    with request.app.state.db.conn() as c:
+        row = c.execute(
+            "SELECT output_path, state FROM export_jobs WHERE id=?",
+            (job_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(404, "job not found")
+    if row["state"] != "done":
+        raise HTTPException(409, f"job not ready (state={row['state']})")
+    path = row["output_path"]
+    if not path or not os.path.isfile(path):
+        raise HTTPException(410, "output missing")
+    return FileResponse(path, media_type="video/mp4")
 
 
 @router.get("/{job_id}/filmstrip.jpg")

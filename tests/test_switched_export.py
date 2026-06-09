@@ -71,7 +71,11 @@ def _insert_clip(db, clip_id, ts, camera, dur, path):
         )
 
 
-async def test_run_switched_trims_and_concats(db, tmp_path, monkeypatch):
+async def test_run_switched_video_only_with_continuous_front_audio(
+    db, tmp_path, monkeypatch,
+):
+    """Switched video is cut per-segment (picture only); audio is one
+    continuous front-camera track muxed at the end, never re-cut at switches."""
     monkeypatch.setattr("web.services.exporter.ffmpeg_available", lambda: True)
     _insert_clip(db, 1, 1000, "F", 60.0, "/rec/f0.mp4")
     _insert_clip(db, 2, 1000, "R", 60.0, "/rec/r0.mp4")
@@ -84,7 +88,7 @@ async def test_run_switched_trims_and_concats(db, tmp_path, monkeypatch):
     calls = []
 
     async def fake_run_ffmpeg(job_id, args, total, **kw):
-        calls.append(args)
+        calls.append(list(args))
         Path(args[-1]).write_bytes(b"\0")
         return 0, ""
 
@@ -106,17 +110,75 @@ async def test_run_switched_trims_and_concats(db, tmp_path, monkeypatch):
            "clip_ids": _json.dumps({"segments": segs, "encoder": "software"})}
     await worker._run_job(job)
 
-    assert finishes and finishes[-1][0] is True
-    assert len(calls) == 3                      # 2 trims + 1 concat
-    trim0 = calls[0]
-    assert "/rec/r0.mp4" in trim0
-    assert trim0[trim0.index("-ss") + 1] == "0.0"
-    assert "scale=1920:1080,setsar=1" in trim0[trim0.index("-vf") + 1]
-    trim1 = calls[1]
-    assert "/rec/f0.mp4" in trim1
-    assert trim1[trim1.index("-ss") + 1] == "20.0"
-    concat = calls[2]
-    assert "concat" in concat and "copy" in concat
+    assert finishes and finishes[-1][0] is True, finishes
+
+    # Video segments are encoded picture-only (-an) and carry no audio codec.
+    video = [a for a in calls if "-an" in a]
+    assert len(video) == 2
+    assert all("-c:a" not in a for a in video)
+    # Rear window first, sourced from the rear file.
+    assert "/rec/r0.mp4" in video[0]
+    assert video[0][video[0].index("-ss") + 1] == "0.0"
+    assert "scale=1920:1080,setsar=1" in video[0][video[0].index("-vf") + 1]
+    # Front window second, sourced from the front file.
+    assert "/rec/f0.mp4" in video[1]
+    assert video[1][video[1].index("-ss") + 1] == "20.0"
+
+    # Audio is a single continuous front-camera track spanning the WHOLE
+    # export — including the rear video window — so it is sourced from the
+    # front file and never from the rear file.
+    audio = [a for a in calls if "-vn" in a]
+    assert len(audio) == 1
+    assert "/rec/f0.mp4" in audio[0]
+    assert audio[0][audio[0].index("-ss") + 1] == "0.0"
+    assert audio[0][audio[0].index("-t") + 1] == "50.0"
+    assert all("/rec/r0.mp4" not in a for a in audio)
+
+    # Final mux pads audio to the video length and copies the picture.
+    mux = next(a for a in calls if "[1:a]apad[aud]" in a)
+    assert "0:v:0" in mux
+    assert "[aud]" in mux
+    assert "-shortest" in mux
+
+
+async def test_run_switched_no_front_footage_yields_silent_video(
+    db, tmp_path, monkeypatch,
+):
+    """If no front footage exists in the span there is no audio source, so
+    the export succeeds as a silent switched video (no audio encode, no mux)."""
+    monkeypatch.setattr("web.services.exporter.ffmpeg_available", lambda: True)
+    _insert_clip(db, 1, 1000, "R", 60.0, "/rec/r0.mp4")
+    snap = MagicMock()
+    snap.recordings = str(tmp_path)
+    provider = MagicMock()
+    provider.get.return_value = snap
+    worker = ExportWorker(db=db, provider=provider, broadcast=_noop)
+
+    calls = []
+
+    async def fake_run_ffmpeg(job_id, args, total, **kw):
+        calls.append(list(args))
+        Path(args[-1]).write_bytes(b"\0")
+        return 0, ""
+
+    async def fake_probe_res(path):
+        return (1920, 1080)
+
+    monkeypatch.setattr(worker, "_run_ffmpeg", fake_run_ffmpeg)
+    monkeypatch.setattr(worker, "_probe_resolution", fake_probe_res)
+    finishes = []
+    monkeypatch.setattr(worker, "_finish",
+                        lambda jid, ok, err, out: finishes.append((ok, err, out)))
+
+    segs = [{"channel": "rear", "start_ts": 1000, "end_ts": 1020}]
+    import json as _json
+    job = {"id": 7, "type": "switched",
+           "clip_ids": _json.dumps({"segments": segs, "encoder": "software"})}
+    await worker._run_job(job)
+
+    assert finishes and finishes[-1][0] is True, finishes
+    assert not any("-vn" in a for a in calls)            # no audio encode
+    assert not any("apad" in tok for a in calls for tok in a)  # no mux
 
 
 async def test_run_switched_no_footage_fails(db, tmp_path, monkeypatch):

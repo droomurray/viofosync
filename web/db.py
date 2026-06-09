@@ -234,6 +234,12 @@ class Database:
         _add_column("export_jobs", "clip_start", "INTEGER")
         _add_column("export_jobs", "clip_end", "INTEGER")
 
+        # Finished-output stats, snapshotted at finish so the export list can
+        # show length + size without re-probing the file on every poll (and
+        # even after the output is later removed).
+        _add_column("export_jobs", "output_size", "INTEGER")
+        _add_column("export_jobs", "output_duration_s", "REAL")
+
     @contextmanager
     def conn(self) -> Iterator[sqlite3.Connection]:
         """Yield a connection with row-factory set.

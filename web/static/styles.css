@@ -475,6 +475,12 @@ main {
 /* Footage cell — date range + clip count. */
 .export-footage { white-space: nowrap; }
 .export-count { color: var(--muted); }
+/* Length + size: compact numeric columns, aligned figures. */
+.export-length, .export-size {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
 
 /* Actions — right-aligned icon buttons; the trailing delete button
  * lines up in a column across rows, with download just left of it. */
@@ -1503,7 +1509,7 @@ main {
   }
   .exports-table-wrap,
   .exports-panel { overflow-x: auto; }
-  .exports-table { min-width: 520px; }
+  .exports-table { min-width: 620px; }
 
   /* Downloads breakdown pills wrap below the date instead of
    * crowding the row. */
@@ -2103,10 +2109,39 @@ main {
 .export-thumb:hover {
   animation: export-scrub 1.2s steps(10, jump-none) infinite;
 }
+/* Only finished jobs' thumbs are clickable (they carry data-job-id and open
+   the export in the player modal). */
+.export-thumb[data-job-id] { cursor: pointer; }
 .export-thumb--empty {
   background: none;
+}
+/* While a finished job's filmstrip is still being generated, show a shimmer
+   placeholder in the same tile. It carries data-job-id so it's click-to-play;
+   it swaps to the real strip on the export_preview_ready event. Override the
+   base 1000% sprite sizing and the :hover scrub (no sprite to scrub yet). */
+.export-thumb--loading,
+.export-thumb--loading:hover {
+  background-color: var(--panel-2);
+  background-image: linear-gradient(
+    100deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.07) 50%,
+    transparent 70%
+  );
+  background-repeat: no-repeat;
+  background-size: 200% 100%;
+  animation: export-shimmer 1.3s ease-in-out infinite;
 }
 @keyframes export-scrub {
   from { background-position-x: 0%; }
   to   { background-position-x: 100%; }
+}
+@keyframes export-shimmer {
+  from { background-position-x: 150%; }
+  to   { background-position-x: -150%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .export-thumb:hover,
+  .export-thumb--loading,
+  .export-thumb--loading:hover { animation: none; }
 }

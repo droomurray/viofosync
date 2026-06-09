@@ -115,6 +115,38 @@ async def test_run_ffmpeg_raises_when_cancelled(db):
         await w._run_ffmpeg(7, ["-y", "out.mp4"], 1.0)
 
 
+async def test_run_ffmpeg_silences_libva_info_chatter(db, monkeypatch):
+    """ffmpeg runs with LIBVA_MESSAGING_LEVEL=1 so the QSV/VAAPI driver only
+    logs real errors, not its benign init handshake — without dropping the
+    rest of the inherited environment."""
+    w = _worker(db)
+    captured: dict = {}
+
+    class _Stream:
+        async def readline(self):
+            return b""           # immediate EOF -> pump loops exit at once
+
+    class _Proc:
+        def __init__(self):
+            self.stdout = _Stream()
+            self.stderr = _Stream()
+            self.returncode = 0
+
+        async def wait(self):
+            return 0
+
+    async def fake_exec(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return _Proc()
+
+    monkeypatch.setattr(exporter.asyncio, "create_subprocess_exec", fake_exec)
+    rc, err = await w._run_ffmpeg(7, ["-y", "out.mp4"], 1.0)
+
+    assert rc == 0
+    assert captured["env"]["LIBVA_MESSAGING_LEVEL"] == "1"
+    assert "PATH" in captured["env"]          # parent env preserved
+
+
 # --- _process: cancelled vs real failure ---
 
 async def test_process_discards_cancelled_job_without_failing(db, monkeypatch):

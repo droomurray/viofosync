@@ -44,7 +44,7 @@ class _ExportCancelled(Exception):
 
 from ..db import Database
 from ..settings import SettingsProvider
-from . import export_preview
+from . import durations, export_preview
 from .naming import channel_of
 
 log = logging.getLogger("viofosync.exporter")
@@ -625,14 +625,30 @@ class ExportWorker:
         # violated the constraint and crashed _finish, leaving
         # the job stuck at state='running' with no broadcast —
         # the UI sat at 0% with no failure indication.)
+        # Snapshot the finished output's size + length onto the row. Size is a
+        # cheap stat; duration reads just the MP4 mvhd box (~108 bytes, sync and
+        # fast — our outputs always carry one). Both stay NULL on failure or if
+        # the probe can't read them, and the UI shows "—".
+        size = None
+        duration = None
+        if ok and output_path:
+            try:
+                size = os.path.getsize(output_path)
+            except OSError:
+                size = None
+            try:
+                duration = durations._probe_duration_mvhd(output_path)
+            except Exception:  # pragma: no cover - best-effort metadata
+                duration = None
         with self.db.write() as c:
             if ok:
                 c.execute(
                     "UPDATE export_jobs SET state=?, error=?, "
-                    "output_path=?, progress=1.0, finished_at=? "
+                    "output_path=?, progress=1.0, finished_at=?, "
+                    "output_size=?, output_duration_s=? "
                     "WHERE id=?",
                     (state, err, output_path,
-                     int(time.time()), job_id),
+                     int(time.time()), size, duration, job_id),
                 )
             else:
                 c.execute(
@@ -662,9 +678,16 @@ class ExportWorker:
         Best-effort: a failure here must never affect the export itself."""
         try:
             recordings = self._provider.get().recordings
-            await export_preview.ensure_export_preview(
+            sp = await export_preview.ensure_export_preview(
                 recordings, job_id, output_path, None,
             )
+            # Tell the UI the strip is ready so it can swap the "generating"
+            # placeholder for the real (hover-scrub) filmstrip. Only on success
+            # — a None means the placeholder simply stays put.
+            if sp:
+                await self.broadcast(
+                    {"type": "export_preview_ready", "job_id": job_id}
+                )
         except Exception:  # pragma: no cover - best-effort
             log.exception("export preview generation failed for job %d", job_id)
 
@@ -922,20 +945,47 @@ class ExportWorker:
             self._finish(job["id"], False, "no footage in selection", None)
             return
 
+        # Audio comes from ONE continuous front-camera track spanning the whole
+        # export, not re-cut at each switch. This is why switched exports no
+        # longer click/jump at switch points: the picture switches cameras while
+        # the audio is a single uninterrupted decode of the front channel. Built
+        # by asking the same piece-builder for one synthetic front segment over
+        # the full [lo, hi] window.
+        audio_pieces = build_switch_pieces(
+            [{"channel": "front", "start_ts": lo, "end_ts": hi}], clips,
+        )
+
         res = await self._probe_resolution(pieces[0]["path"])
         w, h = res if res else (1920, 1080)
         vf = _with_upload(_scale_filter(w, h, encoder), encoder)
 
         tmp = tempfile.mkdtemp(prefix="vfs_switched_")
-        parts: List[str] = []
-        n = len(pieces)
+
+        async def concat_parts(parts: List[str], dst: str, listname: str):
+            """Join same-codec parts with the concat demuxer (no re-encode).
+            Returns ``(rc, err)`` without finishing the job."""
+            list_file = os.path.join(tmp, listname)
+            with open(list_file, "w") as f:
+                for p in parts:
+                    safe = os.path.abspath(p).replace("'", "'\\''")
+                    f.write(f"file '{safe}'\n")
+            return await self._run_ffmpeg(
+                job["id"],
+                ["-y", "-f", "concat", "-safe", "0",
+                 "-i", list_file, "-c", "copy", dst],
+                None, stage="joining",
+            )
+
         try:
+            # --- Video: encode each switched piece picture-only, then join. ---
+            vparts: List[str] = []
+            n = len(pieces)
             for i, pc in enumerate(pieces):
-                seg = os.path.join(tmp, f"seg_{i:04d}.mp4")
+                seg = os.path.join(tmp, f"vid_{i:04d}.mp4")
                 await self.broadcast({
                     "type": "export_progress", "job_id": job["id"],
-                    "progress": i / max(1, n),
-                    "stage": f"segment {i + 1}/{n}",
+                    "progress": 0.6 * i / max(1, n),
+                    "stage": f"video {i + 1}/{n}",
                 })
                 rc, err = await self._run_ffmpeg(
                     job["id"],
@@ -946,15 +996,15 @@ class ExportWorker:
                         "-ss", str(pc["ss"]),
                         "-i", pc["path"],
                         "-t", str(pc["t"]),
+                        "-an",
                         "-vf", vf,
                         *video_codec_args(encoder),
-                        "-c:a", "aac",
                         seg,
                     ],
                     pc["t"],
-                    progress_base=i / max(1, n),
-                    progress_span=1.0 / max(1, n),
-                    stage=f"segment {i + 1}/{n}",
+                    progress_base=0.6 * i / max(1, n),
+                    progress_span=0.6 / max(1, n),
+                    stage=f"video {i + 1}/{n}",
                 )
                 if rc != 0:
                     self._finish(
@@ -963,29 +1013,104 @@ class ExportWorker:
                         None,
                     )
                     return
-                parts.append(seg)
+                vparts.append(seg)
+
+            silent = os.path.join(tmp, "video.mp4")
+            rc, err = await concat_parts(vparts, silent, "video_parts.txt")
+            if rc != 0 or not os.path.exists(silent):
+                self._finish(
+                    job["id"], False,
+                    f"video concat failed (ffmpeg exit {rc}): {err}", None,
+                )
+                return
+
+            # --- Audio: build the continuous front track (or none if no front). ---
+            track: Optional[str] = None
+            if audio_pieces:
+                aparts: List[str] = []
+                m = len(audio_pieces)
+                for i, pc in enumerate(audio_pieces):
+                    ap = os.path.join(tmp, f"aud_{i:04d}.m4a")
+                    await self.broadcast({
+                        "type": "export_progress", "job_id": job["id"],
+                        "progress": 0.6 + 0.25 * i / max(1, m),
+                        "stage": f"audio {i + 1}/{m}",
+                    })
+                    rc, err = await self._run_ffmpeg(
+                        job["id"],
+                        [
+                            "-y",
+                            "-ss", str(pc["ss"]),
+                            "-i", pc["path"],
+                            "-t", str(pc["t"]),
+                            "-vn",
+                            "-c:a", "aac",
+                            ap,
+                        ],
+                        pc["t"],
+                        progress_base=0.6 + 0.25 * i / max(1, m),
+                        progress_span=0.25 / max(1, m),
+                        stage=f"audio {i + 1}/{m}",
+                    )
+                    if rc != 0:
+                        self._finish(
+                            job["id"], False,
+                            f"audio {i + 1} failed (ffmpeg exit {rc}): {err}",
+                            None,
+                        )
+                        return
+                    aparts.append(ap)
+                track = os.path.join(tmp, "audio.m4a")
+                rc, err = await concat_parts(aparts, track, "audio_parts.txt")
+                if rc != 0 or not os.path.exists(track):
+                    self._finish(
+                        job["id"], False,
+                        f"audio concat failed (ffmpeg exit {rc}): {err}", None,
+                    )
+                    return
 
             await self.broadcast({
                 "type": "export_progress", "job_id": job["id"],
-                "progress": 0.98, "stage": "concatenating",
+                "progress": 0.95, "stage": "muxing",
             })
-            list_file = os.path.join(tmp, "parts.txt")
-            with open(list_file, "w") as f:
-                for p in parts:
-                    safe = os.path.abspath(p).replace("'", "'\\''")
-                    f.write(f"file '{safe}'\n")
+
+            if track is None:
+                # No front footage anywhere in the span -> silent switched video.
+                shutil.move(silent, out)
+                ok = os.path.exists(out)
+                self._finish(
+                    job["id"], ok,
+                    None if ok else "mux produced no output",
+                    out if ok else None,
+                )
+                return
+
             rc, err = await self._run_ffmpeg(
                 job["id"],
-                ["-y", "-f", "concat", "-safe", "0",
-                 "-i", list_file, "-c", "copy", out],
-                None, stage="concatenating",
+                [
+                    "-y",
+                    "-i", silent,
+                    "-i", track,
+                    # apad makes the audio effectively endless; -shortest then
+                    # trims the output to the (finite) video length. Net effect:
+                    # the front audio is padded with silence over any stretch the
+                    # front camera didn't cover, keeping A/V locked end-to-end.
+                    "-filter_complex", "[1:a]apad[aud]",
+                    "-map", "0:v:0",
+                    "-map", "[aud]",
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-shortest",
+                    out,
+                ],
+                None, stage="muxing",
             )
             if rc == 0 and os.path.exists(out):
                 self._finish(job["id"], True, None, out)
             else:
                 self._finish(
                     job["id"], False,
-                    f"concat failed (ffmpeg exit {rc}): {err}", None,
+                    f"mux failed (ffmpeg exit {rc}): {err}", None,
                 )
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -1061,10 +1186,20 @@ class ExportWorker:
         await self._resume.wait()
 
         log.info("export job %d: %s", job_id, " ".join(cmd))
+        # libva ignores ffmpeg's -loglevel and prints its init handshake
+        # ("libva info: va_openDriver() returns 0", driver path, VA-API
+        # version) straight to stderr on every QSV/VAAPI process. Our stderr
+        # pump tags all stderr as WARNING, so a multi-segment export floods the
+        # log with benign driver chatter. LIBVA_MESSAGING_LEVEL=1 silences the
+        # info lines at the source while still letting real VA-API errors
+        # through. https://github.com/intel/libva — message-level: 0=none,
+        # 1=error, 2=info (default).
+        env = {**os.environ, "LIBVA_MESSAGING_LEVEL": "1"}
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         self._current_proc = proc
         # If a pause raced in just before the spawn, stop the child now.

@@ -56,6 +56,25 @@ def _insert_job(client, state, output_path):
         return cur.lastrowid
 
 
+def test_list_jobs_reports_has_preview(logged_in_client, tmp_path):
+    """The jobs list flags whether each done job's filmstrip is cached yet, so
+    the UI can show a 'generating' placeholder until the strip exists."""
+    from web.services import export_preview
+    app = logged_in_client.app
+    recordings = app.state.settings_provider.get().recordings
+    done_with = _insert_job(logged_in_client, "done", str(tmp_path / "a.mp4"))
+    done_without = _insert_job(logged_in_client, "done", str(tmp_path / "b.mp4"))
+    running = _insert_job(logged_in_client, "running", None)
+    Path(export_preview.preview_path(recordings, done_with)).write_bytes(
+        b"\xff\xd8\xff\xd9"
+    )
+
+    jobs = {j["id"]: j for j in logged_in_client.get("/api/exports").json()["jobs"]}
+    assert jobs[done_with]["has_preview"] is True
+    assert jobs[done_without]["has_preview"] is False
+    assert jobs[running]["has_preview"] is False
+
+
 def test_filmstrip_jpg_streams_cached_sprite(logged_in_client, tmp_path):
     from pathlib import Path
     from web.services import export_preview

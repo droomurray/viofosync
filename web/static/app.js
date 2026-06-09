@@ -600,6 +600,19 @@ function fmtDuration(seconds) {
   return rem ? `${h}h ${rem}m` : `${h}h`;
 }
 
+// Clock-style H:MM:SS / M:SS — for short media lengths (exports) where
+// fmtDuration's minute rounding ("0 min" for a 40s clip) is too coarse.
+function fmtClock(seconds) {
+  if (seconds == null || !isFinite(seconds) || seconds < 0) return "—";
+  const total = Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const ss = String(s).padStart(2, "0");
+  if (h) return `${h}:${String(m).padStart(2, "0")}:${ss}`;
+  return `${m}:${ss}`;
+}
+
 // ETA wants sub-minute precision; fmtDuration rounds those to "0 min".
 function fmtEta(seconds) {
   if (seconds == null) return "—";
@@ -1200,11 +1213,15 @@ function updateExportsSummary(jobs) {
 
 // Human-readable export type labels. These echo the toolbar
 // buttons: Join F/R and the PiP Fr/Rf (front-main / rear-main).
+// Display labels only. The keys are the load-bearing internal type ids used
+// in the API/DB/routing ("switched" stays "switched" everywhere on the wire);
+// this map just controls what the badge reads. Missing key -> raw id shown.
 const EXPORT_TYPE_LABELS = {
   join_front: "Join Front",
   join_rear: "Join Rear",
   pip: "PiP Fr",
   pip_rear: "PiP Rf",
+  switched: "Timeline",
 };
 
 // Heroicons solid (MIT) — arrow-down-tray (download) + trash (delete),
@@ -1284,6 +1301,7 @@ function renderExportJobs(jobs) {
     <thead><tr>
       <th class="export-preview-col"></th>
       <th>Type</th><th>Status</th><th>Footage</th>
+      <th>Length</th><th>Size</th>
       <th class="exports-actions-col"></th>
     </tr></thead>
     <tbody></tbody>
@@ -1362,24 +1380,51 @@ function renderExportJobs(jobs) {
       `data-id="${j.id}" title="Delete" aria-label="Delete export">` +
       `${EXPORT_ICON_TRASH}</button>`;
 
-    // Filmstrip preview: a static first frame for finished jobs that scrubs
-    // through the export on hover (pure CSS). Non-done rows get an empty cell
-    // of the same size so the columns stay aligned.
-    const previewCell = j.state === "done"
-      ? `<div class="export-thumb" title="Preview" ` +
-        `style="background-image:url(/api/exports/${j.id}/filmstrip.jpg)"></div>`
-      : `<div class="export-thumb export-thumb--empty" aria-hidden="true"></div>`;
+    // Filmstrip preview. A finished job whose strip is cached shows the
+    // static first frame and scrubs through the export on hover (pure CSS).
+    // A finished job whose strip is still generating shows a shimmer
+    // placeholder — still click-to-play, since the output already exists; it
+    // swaps to the real strip on the export_preview_ready event. Non-done rows
+    // get an empty cell of the same size so the columns stay aligned.
+    let previewCell;
+    if (j.state === "done" && j.has_preview) {
+      previewCell =
+        `<div class="export-thumb" data-job-id="${j.id}" title="Play export" ` +
+        `style="background-image:url(/api/exports/${j.id}/filmstrip.jpg)"></div>`;
+    } else if (j.state === "done") {
+      previewCell =
+        `<div class="export-thumb export-thumb--loading" data-job-id="${j.id}" ` +
+        `title="Play export" aria-label="Preview generating"></div>`;
+    } else {
+      previewCell =
+        `<div class="export-thumb export-thumb--empty" aria-hidden="true"></div>`;
+    }
+
+    // Output length + size, snapshotted on the row at finish. Only finished
+    // jobs have them; everything else shows an em-dash.
+    const lengthCell = j.output_duration_s != null
+      ? fmtClock(j.output_duration_s)
+      : "—";
+    const sizeCell = j.output_size != null
+      ? fmtBytes(j.output_size)
+      : "—";
 
     tr.innerHTML = `
       <td class="export-preview">${previewCell}</td>
       <td>${typeCell}</td>
       <td class="export-status">${statusCell}</td>
       <td class="export-footage">${footageCell}</td>
+      <td class="export-length">${lengthCell}</td>
+      <td class="export-size">${sizeCell}</td>
       <td class="export-actions">${dl}${ctrl}${del}</td>
     `;
     tbody.appendChild(tr);
   }
   el.appendChild(table);
+  el.querySelectorAll(".export-thumb[data-job-id]").forEach((thumb) => {
+    thumb.addEventListener("click",
+      () => openExportVideo(Number(thumb.dataset.jobId)));
+  });
   el.querySelectorAll(".export-delete").forEach((btn) => {
     btn.addEventListener("click", async () => {
       if (!confirm("Delete this export job and its output?")) return;
@@ -1440,8 +1485,21 @@ function openVideo(clipId, camera, sourceEl, opts = {}) {
       if (state.autoAdvance) stepVideo(+1);
     });
   }
+  document.querySelector(".modal-nav").hidden = false;  // clip mode: show nav
   document.getElementById("modal").hidden = false;
   updateModalNav();
+}
+
+// Play a finished export in the same modal chrome (overlay, ×, Esc) as the
+// clip player, minus the clip nav — an export is a single standalone video,
+// so prev/next/camera-toggle don't apply. modalClip=null leaves the (null-safe)
+// nav handlers and arrow/F keys as no-ops.
+function openExportVideo(jobId) {
+  state.modalClip = null;
+  document.querySelector(".modal-nav").hidden = true;
+  document.getElementById("modal-body").innerHTML =
+    `<video src="/api/exports/${jobId}/video" controls autoplay></video>`;
+  document.getElementById("modal").hidden = false;
 }
 
 function updateModalNav() {
@@ -1496,6 +1554,7 @@ function toggleVideoCamera() {
 function closeModal() {
   document.getElementById("modal").hidden = true;
   document.getElementById("modal-body").innerHTML = "";
+  document.querySelector(".modal-nav").hidden = false;  // restore default
   state.modalClip = null;
 }
 
@@ -2330,6 +2389,13 @@ function handleEvent(ev) {
       break;
     case "export_finished":
       if (state.exportProgress) delete state.exportProgress[ev.job_id];
+      if (!document.getElementById("view-archive").hidden) {
+        refreshExportJobs();
+      }
+      break;
+    case "export_preview_ready":
+      // Strip finished generating — re-render so the "generating" placeholder
+      // becomes the real hover-scrub filmstrip (has_preview now true).
       if (!document.getElementById("view-archive").hidden) {
         refreshExportJobs();
       }
