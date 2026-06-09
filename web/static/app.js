@@ -20,6 +20,8 @@ const state = {
   filters: { driving: true, parking: true, ro: true },
   showMaps: localStorage.getItem("vfs.showMaps") !== "0",
   archiveSelected: new Map(),  // pair_id → { ts, front, rear }
+  archiveExpanded: new Set(),  // open archive day keys ("YYYY-MM-DD"); persists
+                               // open days across in-app navigation (re-render)
   map: null,
   routeLayer: null,
   ws: null,
@@ -299,7 +301,7 @@ wireArchiveFilter("f-driving", "driving");
 wireArchiveFilter("f-parking", "parking");
 wireArchiveFilter("f-ro", "ro");
 
-// "GPS maps" is a view option, not a filter: it gates the
+// "GPS Journey Splits" is a view option, not a filter: it gates the
 // journey machinery (Leaflet, route fetch, reverse-geocode) on
 // expansion but doesn't change what's fetched. Persisted to
 // localStorage.
@@ -402,6 +404,9 @@ function renderDayCard(d) {
   const el = document.createElement("div");
   el.className = "day";
   el.dataset.day = d.day;
+  // Open days persist in state.archiveExpanded so they survive a re-render
+  // (e.g. navigating to the timeline and back, which rebuilds #days).
+  const open = state.archiveExpanded.has(d.day);
   el.innerHTML = `
     <div class="day-header">
       <h3>${d.day}</h3>
@@ -415,15 +420,26 @@ function renderDayCard(d) {
         } · ${fmtBytes(d.total_bytes)}${d.gpx_count ? " · GPS" : ""}
       </div>
     </div>
-    <div class="day-body" hidden></div>
+    <div class="day-body" ${open ? "" : "hidden"}></div>
   `;
+  const body = el.querySelector(".day-body");
   el.querySelector(".day-header").addEventListener("click", async () => {
-    const body = el.querySelector(".day-body");
-    if (!body.hidden) { body.hidden = true; return; }
+    if (!body.hidden) {
+      body.hidden = true;
+      state.archiveExpanded.delete(d.day);
+      return;
+    }
     body.hidden = false;
+    state.archiveExpanded.add(d.day);
     body.innerHTML = "<p>Loading…</p>";
     await renderDayBody(body, d.day);
   });
+  // Restore a remembered-open day: populate its body immediately. Async; the
+  // card is returned synchronously and fills in when the fetch resolves.
+  if (open) {
+    body.innerHTML = "<p>Loading…</p>";
+    renderDayBody(body, d.day);
+  }
   return el;
 }
 

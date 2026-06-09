@@ -4,7 +4,13 @@
    * the accent without reading as "tinted". The accent is a saturated
    * cobalt; all chrome (active nav, focus rings, progress, selection,
    * map polyline, primary CTAs) routes through it. */
-  --bg: oklch(0.15 0.008 250);
+  /* Lifted off near-black: at oklch(0.15) (≈#0b0d10) the GPU dithers the dark
+   * fill into a faint two-tone stripe (≈#090b0e/#0d0f11) across large bare-bg
+   * areas (login, open export panel). Raising it a few levels clears the
+   * near-black dithering zone while staying clearly darker than --panel, so
+   * cards still read as lighter surfaces. Flat sRGB hex (keeps a faint blue
+   * tint: blue > red); --panel* stay oklch — they're lighter and don't band. */
+  --bg: #15171c;
   --panel: oklch(0.20 0.010 250);
   --panel-2: oklch(0.25 0.012 250);
   --panel-3: oklch(0.30 0.014 250);
