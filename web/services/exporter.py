@@ -45,6 +45,7 @@ class _ExportCancelled(Exception):
 from ..db import Database
 from ..settings import SettingsProvider
 from . import durations, export_preview
+from . import tasks as _tasks
 from .naming import channel_of
 
 log = logging.getLogger("viofosync.exporter")
@@ -57,6 +58,49 @@ def exports_dir(recordings: str) -> str:
     d = os.path.join(recordings, EXPORT_DIR_NAME)
     os.makedirs(d, exist_ok=True)
     return d
+
+
+def _output_path(recordings: str, job_id: int) -> str:
+    return os.path.join(exports_dir(recordings), f"{job_id}.mp4")
+
+
+def _partial_path(recordings: str, job_id: int) -> str:
+    """ffmpeg writes here; the verified result is renamed onto the
+    canonical path. A failed/cancelled job leaves only this, which is
+    then removed — so a partial never lands at the final name (where
+    it would be unreferenced yet count against the quota)."""
+    return _output_path(recordings, job_id) + ".part"
+
+
+def sweep_orphan_exports(db: Database, recordings: str) -> int:
+    """Remove leftover files in .exports that no completed job owns:
+    any ``*.mp4.part`` (a crashed render — no job survives a restart)
+    and any ``{id}.mp4`` without a matching ``done`` row. Returns the
+    count removed. Intended for the lifespan startup hook."""
+    edir = os.path.join(recordings, EXPORT_DIR_NAME)
+    if not os.path.isdir(edir):
+        return 0
+    with db.conn() as c:
+        done = {
+            r["output_path"] for r in c.execute(
+                "SELECT output_path FROM export_jobs "
+                "WHERE state='done' AND output_path IS NOT NULL"
+            ).fetchall()
+        }
+    removed = 0
+    for name in os.listdir(edir):
+        path = os.path.join(edir, name)
+        if name.endswith(".part") or (
+            name.endswith(".mp4") and path not in done
+        ):
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError:  # pragma: no cover — best-effort
+                pass
+    if removed:
+        log.info("removed %d orphaned export file(s) from %s", removed, edir)
+    return removed
 
 
 # Minimum trim length; sub-frame slivers from clamping are dropped.
@@ -646,6 +690,7 @@ class ExportWorker:
             await self._run_job(job)
         except _ExportCancelled:
             log.info("export job %d cancelled — discarded", job["id"])
+            self._discard_partial(job["id"])
         except Exception as e:  # pragma: no cover
             log.exception("export job %d failed", job["id"])
             self._finish(job["id"], False, str(e), None)
@@ -690,6 +735,29 @@ class ExportWorker:
         output_path: Optional[str],
     ) -> None:
         state = "done" if ok else "failed"
+        # output_path arrives as the staged .part name. On success
+        # promote it to the canonical {job_id}.mp4; on failure (here
+        # or via the explicit None callers pass) drop any partial so
+        # .exports doesn't accumulate unreferenced, quota-counting
+        # junk. Cleanup is also keyed by job_id so it works even when
+        # the caller passed output_path=None.
+        if ok and output_path:
+            final = output_path[:-5] if output_path.endswith(".part") \
+                else output_path
+            if final != output_path:
+                try:
+                    os.replace(output_path, final)
+                except OSError:
+                    log.exception("export %d: rename of %s failed",
+                                  job_id, output_path)
+                    ok = False
+                    state = "failed"
+                    err = err or "could not finalise output"
+                    output_path = None
+                else:
+                    output_path = final
+        if not ok:
+            self._discard_partial(job_id)
         # progress is REAL NOT NULL — only force it to 1.0 on
         # success. On failure leave it alone so users can see
         # how far the job got. (Earlier we wrote NULL here, which
@@ -728,7 +796,7 @@ class ExportWorker:
                     (state, err, output_path,
                      int(time.time()), job_id),
                 )
-        asyncio.create_task(
+        _tasks.spawn(
             self.broadcast(
                 {
                     "type": "export_finished",
@@ -736,12 +804,24 @@ class ExportWorker:
                     "ok": ok,
                     "error": err,
                 }
-            )
+            ),
+            name=f"export-finished-{job_id}",
         )
         if ok and output_path:
-            asyncio.create_task(
-                self._make_export_preview(job_id, output_path)
+            _tasks.spawn(
+                self._make_export_preview(job_id, output_path),
+                name=f"export-preview-{job_id}",
             )
+
+    def _discard_partial(self, job_id: int) -> None:
+        """Remove a job's staged .part output (best-effort)."""
+        rec = getattr(self._provider.get(), "recordings", None)
+        if not isinstance(rec, str):
+            return
+        try:
+            os.remove(_partial_path(rec, job_id))
+        except OSError:
+            pass
 
     async def _make_export_preview(self, job_id: int, output_path: str) -> None:
         """Generate the job's filmstrip preview once, after it finishes, so the
@@ -786,9 +866,9 @@ class ExportWorker:
         else:
             clip_ids = raw.get("clip_ids", [])
             encoder = raw.get("encoder") or "software"
-        out = os.path.join(
-            exports_dir(snap.recordings), f"{job['id']}.mp4"
-        )
+        # Stage to a .part name; _finish renames the verified result
+        # onto the canonical path and removes the partial on failure.
+        out = _partial_path(snap.recordings, job["id"])
 
         if job["type"] == "switched":
             segments = raw.get("segments", []) if isinstance(raw, dict) else []

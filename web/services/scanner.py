@@ -218,8 +218,9 @@ def scan(db: Database, destination: str, grouping: str, hub=None, loop=None) -> 
     if hub is not None:
         event = {"type": "clip_indexed", "total": len(seen_paths)}
         try:
-            running = asyncio.get_running_loop()
-            running.create_task(hub.broadcast(event))
+            asyncio.get_running_loop()
+            from . import tasks as _tasks
+            _tasks.spawn(hub.broadcast(event), name="clip-indexed-broadcast")
         except RuntimeError:
             if loop is not None:
                 hub.schedule_broadcast(loop, event)

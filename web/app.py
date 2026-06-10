@@ -37,6 +37,7 @@ from .routers import logs as logs_router
 from .services import durations as _dur_mod
 from .services import retention as _ret_mod
 from .services import scanner
+from .services import tasks as _tasks
 from .services.exporter import (
     ExportWorker,
     ffmpeg_available,
@@ -96,7 +97,10 @@ async def lifespan(app: FastAPI):
         if "SESSION_SECRET" in keys:
             app.state.auth.rotate_secret(snap.session_secret)
 
-    provider.subscribe(_on_settings_changed)
+    # Collect unsubscribe handles so shutdown can detach every
+    # callback — the provider is a module-level singleton, so leaking
+    # callbacks across lifespans pins dead app objects.
+    app.state.settings_unsubscribes = [provider.subscribe(_on_settings_changed)]
 
     db_path = default_db_path()
     migrate_legacy_db_path(db_path)
@@ -113,6 +117,12 @@ async def lifespan(app: FastAPI):
         log.info("reset %d orphan download row(s) to pending", n_dl)
     if n_jobs:
         log.info("marked %d orphan export job(s) as failed", n_jobs)
+    # Drop partial/unreferenced files a crashed render left in
+    # .exports (they'd otherwise count against the recordings quota).
+    try:
+        _exp_mod.sweep_orphan_exports(app.state.db, s.recordings)
+    except Exception:  # pragma: no cover — non-fatal
+        log.exception("export orphan sweep failed")
 
     log.info(
         "viofosync web UI ready on http://%s:%d", s.host, s.port
@@ -252,9 +262,11 @@ async def lifespan(app: FastAPI):
             worker.start()
         elif action == "stop" and worker._is_running():
             log.info("settings change: stopping sync worker")
-            asyncio.create_task(worker.stop())
+            _tasks.spawn(worker.stop(), name="sync-worker-stop")
 
-    provider.subscribe(_on_sync_settings_changed)
+    app.state.settings_unsubscribes.append(
+        provider.subscribe(_on_sync_settings_changed)
+    )
 
     app.state.mqtt = MqttService(
         db=app.state.db,
@@ -267,14 +279,23 @@ async def lifespan(app: FastAPI):
 
     def _on_mqtt_settings_change(keys, snap):
         # Scheduled on the running loop so async work executes safely.
-        asyncio.create_task(app.state.mqtt.on_settings_changed(keys, snap))
+        _tasks.spawn(
+            app.state.mqtt.on_settings_changed(keys, snap),
+            name="mqtt-settings-changed",
+        )
 
-    provider.subscribe(_on_mqtt_settings_change)
+    app.state.settings_unsubscribes.append(
+        provider.subscribe(_on_mqtt_settings_change)
+    )
 
     try:
         yield
     finally:
         log.info("viofosync web UI shutting down")
+        # Detach settings subscribers first so the singleton provider
+        # doesn't keep firing into this (now tearing-down) app.
+        for _unsub in getattr(app.state, "settings_unsubscribes", []):
+            _unsub()
         mqtt_svc = getattr(app.state, "mqtt", None)
         if mqtt_svc is not None:
             await mqtt_svc.stop()

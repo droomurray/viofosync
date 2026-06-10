@@ -693,8 +693,9 @@ def emit_queue_changed(db: Database, hub, *, loop=None) -> None:
     event = {"type": "queue_changed", **counts}
     import asyncio as _asyncio
     try:
-        running = _asyncio.get_running_loop()
-        running.create_task(hub.broadcast(event))
+        _asyncio.get_running_loop()
+        from . import tasks as _tasks
+        _tasks.spawn(hub.broadcast(event), name="queue-changed-broadcast")
         return
     except RuntimeError:
         pass

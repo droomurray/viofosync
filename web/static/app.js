@@ -3444,7 +3444,7 @@ window.addEventListener("hashchange", () => {
       ? `${newCount} new, ${m.present_count} already in archive, `
       : `${m.recognised.length} clip(s), `;
     $("import-folder-manifest").textContent =
-      `${dupNote}${m.skipped.length} skipped, ` +
+      `${dupNote}${m.skipped_count} skipped, ` +
       `${(m.total_bytes / 1e9).toFixed(2)} GB${m.cross_volume ? " (external — copy)" : ""}.`;
     $("import-folder-go").dataset.path = path || "";
     show($("import-folder-go"));

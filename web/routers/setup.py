@@ -7,6 +7,7 @@ every other route 307 to /setup while we're unconfigured.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import socket
 
 from fastapi import APIRouter, Form, HTTPException, Request, Response
@@ -64,13 +65,43 @@ class TestDashcamRequest(BaseModel):
 @router.post("/api/setup/test-dashcam")
 async def test_dashcam(request: Request, body: TestDashcamRequest):
     _require_unconfigured(request)
-    return await _probe(body.address)
+    # This route is reachable WITHOUT auth (the setup window), so
+    # confine it to LAN targets — otherwise it's a TCP-connect prober
+    # against arbitrary host:port for anyone on the network. The
+    # authenticated settings probe stays unrestricted (an admin may
+    # legitimately point at a remote dashcam over VPN).
+    return await _probe(body.address, lan_only=True)
 
 
-async def _probe(address: str) -> dict:
-    """Best-effort TCP-connect probe; returns ok+latency or error."""
+def _is_lan_host(host: str) -> bool:
+    """True only if every address ``host`` resolves to is private,
+    loopback, or link-local. A name that resolves to a global address
+    (or doesn't resolve) is rejected for the unauthenticated probe."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr.split("%", 1)[0])  # strip zone id
+        except ValueError:
+            return False
+        if not (ip.is_private or ip.is_loopback or ip.is_link_local):
+            return False
+    return bool(infos)
+
+
+async def _probe(address: str, *, lan_only: bool = False) -> dict:
+    """Best-effort TCP-connect probe; returns ok+latency or error.
+
+    With ``lan_only`` the target must resolve entirely to LAN
+    addresses (see :func:`_is_lan_host`) before any connection is
+    attempted."""
     host, _, port_s = address.partition(":")
     port = int(port_s) if port_s.isdigit() else 80
+    if lan_only and not _is_lan_host(host):
+        return {"ok": False, "error": "address is not on the local network"}
     loop = asyncio.get_running_loop()
     start = loop.time()
     try:

@@ -85,7 +85,9 @@ def test_scan_lists_recognised_and_skipped(client):
     assert body["total_bytes"] == 10
     assert [it["basename"] for it in body["recognised"]] == [
         "2026_0101_080000_0001F.MP4"]
-    assert {s["name"] for s in body["skipped"]} == {"junk.bin"}
+    # Counts only — the endpoint must not leak skipped filenames.
+    assert body["skipped_count"] == 1
+    assert "skipped" not in body
 
 
 def test_present_reports_clips_already_in_archive(client):

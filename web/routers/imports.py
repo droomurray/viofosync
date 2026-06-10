@@ -71,13 +71,17 @@ def scan(request: Request, body: _PathBody) -> dict:
         d = importer.scan_item_dict(it)
         d["present"] = it.basename in present
         recognised.append(d)
+    # Report only a count of skipped files, never their names: the
+    # scan root can be any readable directory the user types, so
+    # returning every non-matching filename was an authenticated
+    # directory-listing primitive.
     return {
         "path": root,
         "cross_volume": importer.is_cross_volume(root, snap.recordings),
         "total_bytes": man.total_bytes,
         "present_count": len(present),
         "recognised": recognised,
-        "skipped": man.skipped,
+        "skipped_count": len(man.skipped),
     }
 
 

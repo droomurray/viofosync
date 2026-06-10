@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from ..auth import require_csrf, require_session
 from ..services import durations, filmstrip, route_cache, scanner, thumbs
+from ..services import tasks as _tasks
 from ..services import gps as gps_service
 from ..services.naming import CHANNEL_LABELS, CHANNEL_ORDER, channel_of
 
@@ -592,12 +593,14 @@ async def rescan(request: Request) -> JSONResponse:
         request.app.state.db, s.recordings, s.grouping,
         request.app.state.hub, asyncio.get_running_loop(),
     )
-    asyncio.create_task(
-        scanner.sweep_missing_thumbs(
-            request.app.state.db, s.recordings,
-        )
+    _tasks.spawn(
+        scanner.sweep_missing_thumbs(request.app.state.db, s.recordings),
+        name="rescan-thumb-sweep",
     )
-    asyncio.create_task(durations.sweep_missing_durations(request.app.state.db))
+    _tasks.spawn(
+        durations.sweep_missing_durations(request.app.state.db),
+        name="rescan-duration-sweep",
+    )
     return JSONResponse({"ok": True, "indexed": n})
 
 
