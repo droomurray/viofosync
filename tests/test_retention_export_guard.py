@@ -70,7 +70,7 @@ def test_protect_ids_legacy_list_payload(env):
     assert export_protect_ids(db) == frozenset({4, 5})
 
 
-def test_protect_ids_switched_job_uses_time_range(env):
+def test_protect_ids_timeline_job_uses_time_range(env):
     rec, db = env
     inside = _make_clip(rec, db, basename="IN.MP4", ts=5000)
     outside = _make_clip(rec, db, basename="OUT.MP4", ts=50_000)

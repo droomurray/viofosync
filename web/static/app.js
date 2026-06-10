@@ -1192,6 +1192,20 @@ function setExportsPanelOpen(open) {
   toggle.querySelector(".caret").textContent = open ? "▾" : "▸";
 }
 
+// Used by the timeline editor's "View export jobs" toast action: surface the
+// Archive tab and expand the (collapsible) export-jobs panel.
+function viewExportJobs() {
+  location.hash = "#/archive";
+  setExportsPanelOpen(true);
+  // Defer the scroll: the hashchange -> routeTo that un-hides #view-archive
+  // runs after this call stack, so scrolling now (while the archive view is
+  // still hidden behind the timeline tab) would be a no-op.
+  requestAnimationFrame(() => {
+    const panel = document.getElementById("exports-panel");
+    if (panel) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+}
+
 document.getElementById("exports-toggle").addEventListener("click", () => {
   const open = document.getElementById("exports-toggle")
     .getAttribute("aria-expanded") === "true";
@@ -1244,17 +1258,67 @@ function updateExportsSummary(jobs) {
     : "Export jobs";
 }
 
+// App-wide transient notification. `type` is "success" (default) or "error".
+// Optional { actionLabel, onAction } renders a single inline action button.
+// Auto-dismisses after `duration` ms (errors linger longer); also closable.
+function toast(message, opts = {}) {
+  const { type = "success", actionLabel, onAction, duration } = opts;
+  const host = document.getElementById("toast-container");
+  if (!host) return;
+  const card = document.createElement("div");
+  card.className = `toast toast--${type === "error" ? "error" : "success"}`;
+  card.setAttribute("role", type === "error" ? "alert" : "status");
+
+  const msg = document.createElement("span");
+  msg.className = "toast__msg";
+  msg.textContent = message;
+  card.appendChild(msg);
+
+  if (actionLabel && typeof onAction === "function") {
+    const act = document.createElement("button");
+    act.type = "button";
+    act.className = "toast__action";
+    act.textContent = actionLabel;
+    act.addEventListener("click", () => { dismiss(); onAction(); });
+    card.appendChild(act);
+  }
+
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "toast__close";
+  close.setAttribute("aria-label", "Dismiss");
+  close.textContent = "×";
+  close.addEventListener("click", dismiss);
+  card.appendChild(close);
+
+  host.appendChild(card);
+  // Trigger the enter transition on the next frame.
+  requestAnimationFrame(() => card.classList.add("toast--in"));
+
+  let timer = setTimeout(dismiss, duration || (type === "error" ? 7000 : 5000));
+  let gone = false;
+  function dismiss() {
+    if (gone) return;
+    gone = true;
+    clearTimeout(timer);
+    card.classList.remove("toast--in");
+    card.addEventListener("transitionend", () => card.remove(), { once: true });
+    // Fallback removal in case the transitionend never fires.
+    setTimeout(() => card.remove(), 400);
+  }
+}
+
 // Human-readable export type labels. These echo the toolbar
 // buttons: Join F/R and the PiP Fr/Rf (front-main / rear-main).
 // Display labels only. The keys are the load-bearing internal type ids used
-// in the API/DB/routing ("switched" stays "switched" everywhere on the wire);
+// in the API/DB/routing (the timeline-cut type is "timeline" on the wire);
 // this map just controls what the badge reads. Missing key -> raw id shown.
 const EXPORT_TYPE_LABELS = {
   join_front: "Join Front",
   join_rear: "Join Rear",
   pip: "PiP Fr",
   pip_rear: "PiP Rf",
-  switched: "Timeline",
+  timeline: "Timeline",
 };
 
 // Heroicons solid (MIT) — arrow-down-tray (download) + trash (delete),

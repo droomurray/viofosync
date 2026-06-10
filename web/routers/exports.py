@@ -62,7 +62,7 @@ class Segment(BaseModel):
 
 class CreateExport(BaseModel):
     type: str = Field(
-        pattern="^(join_front|join_rear|pip|pip_rear|switched)$"
+        pattern="^(join_front|join_rear|pip|pip_rear|timeline)$"
     )
     clip_ids: List[int] = []
     segments: list[Segment] | None = None
@@ -100,9 +100,9 @@ def create(body: CreateExport, request: Request) -> dict:
             f"encoder '{encoder}' not available on this server",
         )
     try:
-        if body.type == "switched":
+        if body.type == "timeline":
             segs = [s.model_dump() for s in (body.segments or [])]
-            job_id = worker.enqueue_switched(segs, encoder=encoder)
+            job_id = worker.enqueue_timeline(segs, encoder=encoder)
         else:
             job_id = worker.enqueue(
                 body.type, body.clip_ids, encoder=encoder,

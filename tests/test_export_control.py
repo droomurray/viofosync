@@ -30,7 +30,7 @@ def _job(db: Database, jid: int, state: str = "running") -> None:
     with db.write() as c:
         c.execute(
             "INSERT INTO export_jobs (id, type, clip_ids, state, created_at) "
-            "VALUES (?, 'switched', '{}', ?, 0)",
+            "VALUES (?, 'timeline', '{}', ?, 0)",
             (jid, state),
         )
 

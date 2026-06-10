@@ -1,4 +1,4 @@
-"""Tests for the switched export job (enqueue + render, ffmpeg mocked)."""
+"""Tests for the timeline export job (enqueue + render, ffmpeg mocked)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -23,20 +23,20 @@ def _worker(db):
     return ExportWorker(db=db, provider=MagicMock(), broadcast=_noop)
 
 
-def test_enqueue_switched_stores_plan_and_range(db, monkeypatch):
+def test_enqueue_timeline_stores_plan_and_range(db, monkeypatch):
     monkeypatch.setattr("web.services.exporter.ffmpeg_available", lambda: True)
     segs = [
         {"channel": "rear", "start_ts": 1000.0, "end_ts": 1020.0},
         {"channel": "front", "start_ts": 1020.0, "end_ts": 1050.0},
     ]
-    job_id = _worker(db).enqueue_switched(segs, encoder="software")
+    job_id = _worker(db).enqueue_timeline(segs, encoder="software")
     with db.conn() as c:
         row = c.execute(
             "SELECT type, clip_ids, clip_start, clip_end FROM export_jobs WHERE id=?",
             (job_id,),
         ).fetchone()
     import json
-    assert row["type"] == "switched"
+    assert row["type"] == "timeline"
     payload = json.loads(row["clip_ids"])
     assert payload["encoder"] == "software"
     assert len(payload["segments"]) == 2
@@ -44,16 +44,16 @@ def test_enqueue_switched_stores_plan_and_range(db, monkeypatch):
     assert row["clip_end"] == 1050
 
 
-def test_enqueue_switched_rejects_empty(db, monkeypatch):
+def test_enqueue_timeline_rejects_empty(db, monkeypatch):
     monkeypatch.setattr("web.services.exporter.ffmpeg_available", lambda: True)
     with pytest.raises(ValueError):
-        _worker(db).enqueue_switched([], encoder="software")
+        _worker(db).enqueue_timeline([], encoder="software")
 
 
-def test_enqueue_switched_rejects_bad_window(db, monkeypatch):
+def test_enqueue_timeline_rejects_bad_window(db, monkeypatch):
     monkeypatch.setattr("web.services.exporter.ffmpeg_available", lambda: True)
     with pytest.raises(ValueError):
-        _worker(db).enqueue_switched(
+        _worker(db).enqueue_timeline(
             [{"channel": "front", "start_ts": 50.0, "end_ts": 50.0}],
             encoder="software",
         )
@@ -71,10 +71,10 @@ def _insert_clip(db, clip_id, ts, camera, dur, path):
         )
 
 
-async def test_run_switched_video_only_with_continuous_front_audio(
+async def test_run_timeline_video_only_with_continuous_front_audio(
     db, tmp_path, monkeypatch,
 ):
-    """Switched video is cut per-segment (picture only); audio is one
+    """Timeline video is cut per-segment (picture only); audio is one
     continuous front-camera track muxed at the end, never re-cut at switches."""
     monkeypatch.setattr("web.services.exporter.ffmpeg_available", lambda: True)
     _insert_clip(db, 1, 1000, "F", 60.0, "/rec/f0.mp4")
@@ -106,7 +106,7 @@ async def test_run_switched_video_only_with_continuous_front_audio(
         {"channel": "front", "start_ts": 1020, "end_ts": 1050},
     ]
     import json as _json
-    job = {"id": 5, "type": "switched",
+    job = {"id": 5, "type": "timeline",
            "clip_ids": _json.dumps({"segments": segs, "encoder": "software"})}
     await worker._run_job(job)
 
@@ -141,11 +141,11 @@ async def test_run_switched_video_only_with_continuous_front_audio(
     assert "-shortest" in mux
 
 
-async def test_run_switched_no_front_footage_yields_silent_video(
+async def test_run_timeline_no_front_footage_yields_silent_video(
     db, tmp_path, monkeypatch,
 ):
     """If no front footage exists in the span there is no audio source, so
-    the export succeeds as a silent switched video (no audio encode, no mux)."""
+    the export succeeds as a silent timeline video (no audio encode, no mux)."""
     monkeypatch.setattr("web.services.exporter.ffmpeg_available", lambda: True)
     _insert_clip(db, 1, 1000, "R", 60.0, "/rec/r0.mp4")
     snap = MagicMock()
@@ -172,7 +172,7 @@ async def test_run_switched_no_front_footage_yields_silent_video(
 
     segs = [{"channel": "rear", "start_ts": 1000, "end_ts": 1020}]
     import json as _json
-    job = {"id": 7, "type": "switched",
+    job = {"id": 7, "type": "timeline",
            "clip_ids": _json.dumps({"segments": segs, "encoder": "software"})}
     await worker._run_job(job)
 
@@ -181,7 +181,7 @@ async def test_run_switched_no_front_footage_yields_silent_video(
     assert not any("apad" in tok for a in calls for tok in a)  # no mux
 
 
-async def test_run_switched_no_footage_fails(db, tmp_path, monkeypatch):
+async def test_run_timeline_no_footage_fails(db, tmp_path, monkeypatch):
     monkeypatch.setattr("web.services.exporter.ffmpeg_available", lambda: True)
     snap = MagicMock()
     snap.recordings = str(tmp_path)
@@ -192,7 +192,7 @@ async def test_run_switched_no_footage_fails(db, tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "_finish",
                         lambda jid, ok, err, out: finishes.append((ok, err)))
     import json as _json
-    job = {"id": 6, "type": "switched",
+    job = {"id": 6, "type": "timeline",
            "clip_ids": _json.dumps(
                {"segments": [{"channel": "front", "start_ts": 1, "end_ts": 9}],
                 "encoder": "software"})}
@@ -236,11 +236,11 @@ def logged_in_client(tmp_config_dir, tmp_recordings_dir, monkeypatch):
     settings_mod.reset_for_tests()
 
 
-def test_post_switched_export_creates_job(logged_in_client, monkeypatch):
+def test_post_timeline_export_creates_job(logged_in_client, monkeypatch):
     logged_in_client.app.state.export_encoders = {"software": True}
     csrf = logged_in_client.get("/api/auth/csrf").json()["csrf"]
     r = logged_in_client.post("/api/exports", json={
-        "type": "switched",
+        "type": "timeline",
         "segments": [
             {"channel": "rear", "start_ts": 1000.0, "end_ts": 1020.0},
             {"channel": "front", "start_ts": 1020.0, "end_ts": 1050.0},
@@ -251,10 +251,10 @@ def test_post_switched_export_creates_job(logged_in_client, monkeypatch):
     assert "job_id" in r.json()
 
 
-def test_post_switched_requires_segments(logged_in_client):
+def test_post_timeline_requires_segments(logged_in_client):
     logged_in_client.app.state.export_encoders = {"software": True}
     csrf = logged_in_client.get("/api/auth/csrf").json()["csrf"]
     r = logged_in_client.post("/api/exports", json={
-        "type": "switched", "clip_ids": [], "encoder": "software"},
+        "type": "timeline", "clip_ids": [], "encoder": "software"},
         headers={"x-csrf-token": csrf})
     assert r.status_code in (400, 422)

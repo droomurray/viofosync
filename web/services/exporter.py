@@ -108,7 +108,7 @@ _MIN_PIECE_S = 0.05
 
 
 def build_switch_pieces(segments: list, clips: list) -> list:
-    """Turn a switched-export plan into an ordered list of trims.
+    """Turn a timeline-export plan into an ordered list of trims.
 
     ``segments`` is ``[{channel, start_ts, end_ts}, ...]`` (in output
     order). ``clips`` is ``[{path, channel, start_ts, duration_s}, ...]``
@@ -169,8 +169,8 @@ def reconcile_orphan_jobs(db: Database) -> int:
 
 
 # How far before clip_start a source clip may begin and still overlap
-# a switched export's window (clips run 1–5 min; 10 min is generous).
-_SWITCHED_PROTECT_MARGIN_S = 600
+# a timeline export's window (clips run 1–5 min; 10 min is generous).
+_TIMELINE_PROTECT_MARGIN_S = 600
 
 
 def export_protect_ids(db: Database) -> frozenset[int]:
@@ -179,7 +179,7 @@ def export_protect_ids(db: Database) -> frozenset[int]:
     Retention passes this as ``protect_ids`` so the sweep can't
     delete a source file mid-render (multi-segment jobs open inputs
     per segment — a vanished clip fails the job with ENOENT).
-    join/pip jobs name their clips outright; switched jobs resolve
+    join/pip jobs name their clips outright; timeline jobs resolve
     clips at run time by channel + time, so those are protected by
     timestamp range with a one-clip margin before the window.
     """
@@ -202,12 +202,12 @@ def export_protect_ids(db: Database) -> frozenset[int]:
             if isinstance(payload, list):
                 ids.update(int(i) for i in payload)
                 continue
-            # Switched job: protect everything overlapping its window.
+            # Timeline job: protect everything overlapping its window.
             if r["clip_start"] is not None and r["clip_end"] is not None:
                 hits = c.execute(
                     "SELECT id FROM clip_index "
                     "WHERE timestamp BETWEEN ? AND ?",
-                    (r["clip_start"] - _SWITCHED_PROTECT_MARGIN_S,
+                    (r["clip_start"] - _TIMELINE_PROTECT_MARGIN_S,
                      r["clip_end"]),
                 ).fetchall()
                 ids.update(h["id"] for h in hits)
@@ -642,7 +642,7 @@ class ExportWorker:
             )
             return cur.lastrowid
 
-    def enqueue_switched(self, segments: list, encoder: str = "software") -> int:
+    def enqueue_timeline(self, segments: list, encoder: str = "software") -> int:
         if not ffmpeg_available():
             raise RuntimeError("ffmpeg not installed on this host")
         if not segments:
@@ -661,7 +661,7 @@ class ExportWorker:
                 """
                 INSERT INTO export_jobs
                     (type, clip_ids, state, created_at, clip_start, clip_end)
-                VALUES ('switched', ?, 'queued', ?, ?, ?)
+                VALUES ('timeline', ?, 'queued', ?, ?, ?)
                 """,
                 (payload, int(time.time()), clip_start, clip_end),
             )
@@ -870,9 +870,9 @@ class ExportWorker:
         # onto the canonical path and removes the partial on failure.
         out = _partial_path(snap.recordings, job["id"])
 
-        if job["type"] == "switched":
+        if job["type"] == "timeline":
             segments = raw.get("segments", []) if isinstance(raw, dict) else []
-            await self._run_switched(job, segments, encoder, out)
+            await self._run_timeline(job, segments, encoder, out)
             return
 
         clips = self._fetch_clips(clip_ids)
@@ -1069,7 +1069,7 @@ class ExportWorker:
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    async def _run_switched(self, job, segments, encoder, out) -> None:
+    async def _run_timeline(self, job, segments, encoder, out) -> None:
         lo = min(s["start_ts"] for s in segments)
         hi = max(s["end_ts"] for s in segments)
         with self.db.conn() as c:
@@ -1097,7 +1097,7 @@ class ExportWorker:
             return
 
         # Audio comes from ONE continuous front-camera track spanning the whole
-        # export, not re-cut at each switch. This is why switched exports no
+        # export, not re-cut at each switch. This is why timeline exports no
         # longer click/jump at switch points: the picture switches cameras while
         # the audio is a single uninterrupted decode of the front channel. Built
         # by asking the same piece-builder for one synthetic front segment over
@@ -1110,7 +1110,7 @@ class ExportWorker:
         w, h = res if res else (1920, 1080)
         vf = _with_upload(_scale_filter(w, h, encoder), encoder)
 
-        tmp = tempfile.mkdtemp(prefix="vfs_switched_")
+        tmp = tempfile.mkdtemp(prefix="vfs_timeline_")
 
         async def concat_parts(parts: List[str], dst: str, listname: str):
             """Join same-codec parts with the concat demuxer (no re-encode).
@@ -1128,7 +1128,7 @@ class ExportWorker:
             )
 
         try:
-            # --- Video: encode each switched piece picture-only, then join. ---
+            # --- Video: encode each timeline piece picture-only, then join. ---
             vparts: List[str] = []
             n = len(pieces)
             for i, pc in enumerate(pieces):
@@ -1226,7 +1226,7 @@ class ExportWorker:
             })
 
             if track is None:
-                # No front footage anywhere in the span -> silent switched video.
+                # No front footage anywhere in the span -> silent timeline video.
                 shutil.move(silent, out)
                 ok = os.path.exists(out)
                 self._finish(

@@ -73,7 +73,7 @@ def test_hw_upload_filter_only_for_vaapi():
     assert exporter._hw_upload_filter("nvenc") == ""
 
 
-# --- switched export wiring (the reported failure) ---
+# --- timeline export wiring (the reported failure) ---
 
 @pytest.fixture
 def db(tmp_path: Path) -> Database:
@@ -95,7 +95,7 @@ def _insert_clip(db: Database, path: str, ts: int, dur: float = 60.0) -> None:
         )
 
 
-async def _capture_switched(db, tmp_path, monkeypatch, encoder):
+async def _capture_timeline(db, tmp_path, monkeypatch, encoder):
     worker = ExportWorker(db=db, provider=MagicMock(), broadcast=_noop)
     base = 1_000_000
     _insert_clip(db, str(tmp_path / "f.mp4"), base, 60.0)
@@ -114,23 +114,23 @@ async def _capture_switched(db, tmp_path, monkeypatch, encoder):
     monkeypatch.setattr(worker, "_probe_resolution", fake_res)
 
     segments = [{"channel": "front", "start_ts": base + 10, "end_ts": base + 30}]
-    await worker._run_switched({"id": 1}, segments, encoder, str(tmp_path / "out.mp4"))
+    await worker._run_timeline({"id": 1}, segments, encoder, str(tmp_path / "out.mp4"))
 
     # the per-segment encode is the call carrying the scale filter
     return next(a for a in captured
                 if "-vf" in a and "scale" in a[a.index("-vf") + 1])
 
 
-async def test_switched_vaapi_adds_device_and_hwupload(db, tmp_path, monkeypatch):
-    seg = await _capture_switched(db, tmp_path, monkeypatch, "vaapi")
+async def test_timeline_vaapi_adds_device_and_hwupload(db, tmp_path, monkeypatch):
+    seg = await _capture_timeline(db, tmp_path, monkeypatch, "vaapi")
     assert seg[seg.index("-vaapi_device") + 1] == "/dev/dri/renderD128"
     assert seg.index("-vaapi_device") < seg.index("-i")          # global, before input
     assert seg[seg.index("-vf") + 1] == "scale=1920:1080,setsar=1,format=nv12,hwupload"
     assert "h264_vaapi" in seg
 
 
-async def test_switched_software_has_no_hw_args(db, tmp_path, monkeypatch):
-    seg = await _capture_switched(db, tmp_path, monkeypatch, "software")
+async def test_timeline_software_has_no_hw_args(db, tmp_path, monkeypatch):
+    seg = await _capture_timeline(db, tmp_path, monkeypatch, "software")
     assert "-vaapi_device" not in seg
     assert seg[seg.index("-vf") + 1] == "scale=1920:1080,setsar=1"
     assert "libx264" in seg
@@ -158,8 +158,8 @@ def test_scale_filter_dialects():
     assert exporter._scale_filter(1920, 1080, "qsv") == "scale_qsv=w=1920:h=1080"
 
 
-async def test_switched_qsv_uses_gpu_chain(db, tmp_path, monkeypatch):
-    seg = await _capture_switched(db, tmp_path, monkeypatch, "qsv")
+async def test_timeline_qsv_uses_gpu_chain(db, tmp_path, monkeypatch):
+    seg = await _capture_timeline(db, tmp_path, monkeypatch, "qsv")
     # device init present, before input
     assert seg[seg.index("-init_hw_device") + 1] == "qsv=hw"
     # per-input decode flags present, before -i

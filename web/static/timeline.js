@@ -850,7 +850,6 @@
     renderActive();
     updateSelInfo();
     updateTransport();
-    syncExportButtons();
     scheduleSave();
   }
   function renderSelection() {
@@ -903,7 +902,7 @@
 
   // Per-segment shading: on each track, the segments that DON'T use this
   // camera are dimmed, and everything outside [inTs,outTs] is darker — so
-  // the bright regions read as exactly what the switched export will use.
+  // the bright regions read as exactly what the timeline export will use.
   function renderShading() {
     if (state.inTs == null) return;
     const { start, end } = bounds();
@@ -938,54 +937,31 @@
   }
 
   // ---- export ----
-  async function postExport(body, label) {
-    const status = el("tl-exp-status");
-    status.textContent = `${label}: queuing…`;
+  async function postExport(body) {
     try {
       const r = await api("/api/exports", {
         method: "POST", body: JSON.stringify(body),
       });
-      status.textContent =
-        `${label}: queued (job ${r.job_id}) — track it under Archive ▸ Export jobs`;
+      toast(`Export queued — job #${r.job_id}`, {
+        type: "success",
+        actionLabel: "View export jobs",
+        onAction: viewExportJobs,
+      });
     } catch (err) {
-      status.textContent = `${label}: failed (${err.message || err})`;
+      toast(`Export failed: ${err.message || err}`, { type: "error" });
     }
   }
-  function exportSwitched() {
+  function exportTimeline() {
     const dis = state.disabledChannels || new Set();
     const segments = state.segments
       .filter((s) => !dis.has(s.camera))
       .map((s) => ({ channel: s.camera, start_ts: s.start, end_ts: s.end }));
     if (!segments.length) {
-      el("tl-exp-status").textContent = "Nothing to export";
+      toast("Nothing to export — enable a camera track first.",
+        { type: "error" });
       return;
     }
-    postExport({ type: "switched", segments }, "Switched");
-  }
-  function channelHasFootage(channel) {
-    if ((state.disabledChannels || new Set()).has(channel)) return false;
-    return (state.clipsByChannel[channel] || []).some(
-      (c) => c.start_ts < state.outTs
-        && c.start_ts + (c.duration_s || 0) > state.inTs);
-  }
-  function exportSingle(channel) {
-    const label = (state.channels.find((c) => c.key === channel) || {}).label
-      || channel;
-    if (!channelHasFootage(channel)) {
-      el("tl-exp-status").textContent = `No ${label} footage in selection`;
-      return;
-    }
-    postExport({
-      type: "switched",
-      segments: [{ channel, start_ts: state.inTs, end_ts: state.outTs }],
-    }, label);
-  }
-  // Hide per-camera export buttons for channels this journey doesn't have.
-  function syncExportButtons() {
-    const present = new Set(state.channels.map((c) => c.key));
-    const f = el("tl-exp-front"), r = el("tl-exp-rear");
-    if (f) f.hidden = !present.has("front");
-    if (r) r.hidden = !present.has("rear");
+    postExport({ type: "timeline", segments });
   }
 
   // Editor keyboard shortcuts — one source of truth. Each entry drives three
@@ -1082,9 +1058,7 @@
     el("tl-out").addEventListener("click", setOut);
     el("tl-switch").addEventListener("click", addSwitchAtPlayhead);
     el("tl-clear").addEventListener("click", clearEditor);
-    el("tl-exp-switched").addEventListener("click", exportSwitched);
-    el("tl-exp-front").addEventListener("click", () => exportSingle("front"));
-    el("tl-exp-rear").addEventListener("click", () => exportSingle("rear"));
+    el("tl-exp-go").addEventListener("click", exportTimeline);
     // Track on/off toggles (delegated — rows are rebuilt on every render).
     el("tl-tracks").addEventListener("click", (e) => {
       const del = e.target.closest(".tl-switch-del");

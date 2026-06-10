@@ -257,12 +257,8 @@
           <span class="tl-selinfo" id="tl-selinfo"></span>
           <span class="tl-spacer"></span>
           <div class="tl-grp">
-            <span class="tl-exp-label">Export</span>
-            <button type="button" id="tl-exp-switched" class="tl-abtn primary">Switched</button>
-            <button type="button" id="tl-exp-front" class="tl-abtn">Front</button>
-            <button type="button" id="tl-exp-rear" class="tl-abtn">Rear</button>
+            <button type="button" id="tl-exp-go" class="tl-abtn primary">Export</button>
           </div>
-          <span class="tl-exp-status" id="tl-exp-status" aria-live="polite"></span>
         </div>
       </section>
     </main>
@@ -282,6 +278,8 @@
         </div>
       </div>
     </div>
+
+    <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
 
     <div id="import-modal" class="modal hidden" role="dialog" aria-modal="true"
          aria-labelledby="import-title">

@@ -136,7 +136,7 @@ CREATE INDEX IF NOT EXISTS idx_queue_state
 
 CREATE TABLE IF NOT EXISTS export_jobs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    type          TEXT NOT NULL,      -- join_front|join_rear|pip
+    type          TEXT NOT NULL,      -- join_front|join_rear|pip|pip_rear|timeline
     clip_ids      TEXT NOT NULL,      -- JSON array
     state         TEXT NOT NULL,      -- queued|running|done|failed|cancelled
     progress      REAL NOT NULL DEFAULT 0.0,

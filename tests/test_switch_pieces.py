@@ -1,4 +1,4 @@
-"""Tests for the pure switched-export piece builder."""
+"""Tests for the pure timeline-export piece builder."""
 from __future__ import annotations
 
 from web.services.exporter import build_switch_pieces
