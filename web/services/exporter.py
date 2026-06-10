@@ -483,11 +483,31 @@ class ExportWorker:
 
     async def stop(self) -> None:
         self._stop.set()
+        # Unwind any in-flight job: a paused child is SIGSTOP'd and
+        # must be resumed before the kill can take effect, and a
+        # running encoder won't finish inside the shutdown timeout.
+        # Without this the ffmpeg child outlives the server (forever,
+        # if frozen). The job row is reconciled to 'failed' on next
+        # boot by reconcile_orphan_jobs.
+        self._cancel_current = True
+        self._paused = False
+        self._resume.set()
+        proc = self._current_proc
+        if proc is not None:
+            with contextlib.suppress(Exception):
+                proc.send_signal(signal.SIGCONT)
+            with contextlib.suppress(Exception):
+                proc.kill()
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=5.0)
             except asyncio.TimeoutError:
                 self._task.cancel()
+                # Await the cancellation so the job's cleanup
+                # (temp dirs, subprocess reaping) runs before the
+                # loop tears down.
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._task
 
     # ---- Job creation (called from the HTTP route) ----
 
@@ -561,7 +581,7 @@ class ExportWorker:
 
     async def _run(self) -> None:
         while not self._stop.is_set():
-            job = self._pop_next()
+            job = await self._pop_next()
             if job is None:
                 try:
                     await asyncio.wait_for(
@@ -590,7 +610,12 @@ class ExportWorker:
             self._paused = False
             self._resume.set()
 
-    def _pop_next(self) -> Optional[dict]:
+    async def _pop_next(self) -> Optional[dict]:
+        # The write transaction contends with worker threads for the
+        # DB lock (scanner flush, retention) — wait off the loop.
+        return await asyncio.to_thread(self._pop_next_sync)
+
+    def _pop_next_sync(self) -> Optional[dict]:
         with self.db.write() as c:
             row = c.execute(
                 "SELECT * FROM export_jobs "

@@ -66,7 +66,12 @@ def get_dashcam_filenames(
     try:
         url = f"{base_url}/?custom=1&cmd=3015&par=1"
         request = urllib.request.Request(url)
-        response = urllib.request.urlopen(request)
+        # Read the tunable at call time — download_file_with
+        # temporarily overrides it. Without a timeout a half-open
+        # connection wedges the sync worker's thread forever.
+        response = urllib.request.urlopen(
+            request, timeout=socket_timeout
+        )
 
         if response.getcode() != 200:
             raise RuntimeError(

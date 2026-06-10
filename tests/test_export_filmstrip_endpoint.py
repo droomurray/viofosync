@@ -77,6 +77,7 @@ def test_list_jobs_reports_has_preview(logged_in_client, tmp_path):
 
 def test_filmstrip_jpg_streams_cached_sprite(logged_in_client, tmp_path):
     from pathlib import Path
+
     from web.services import export_preview
     app = logged_in_client.app
     recordings = app.state.settings_provider.get().recordings

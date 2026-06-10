@@ -61,7 +61,8 @@ def _worker(db: Database) -> ExportWorker:
 # --- pause / resume ---
 
 async def test_pause_signals_stop_and_sets_state(db):
-    w = _worker(db); _job(db, 7, "running")
+    w = _worker(db)
+    _job(db, 7, "running")
     w._current_job_id = 7
     w._current_proc = _FakeProc()
     assert await w.pause(7) is True
@@ -71,7 +72,8 @@ async def test_pause_signals_stop_and_sets_state(db):
 
 
 async def test_resume_signals_cont_and_sets_state(db):
-    w = _worker(db); _job(db, 7, "paused")
+    w = _worker(db)
+    _job(db, 7, "paused")
     fake = _FakeProc()
     w._current_job_id = 7
     w._current_proc = fake
@@ -83,7 +85,8 @@ async def test_resume_signals_cont_and_sets_state(db):
 
 
 async def test_pause_false_for_non_current_job(db):
-    w = _worker(db); _job(db, 7, "running")
+    w = _worker(db)
+    _job(db, 7, "running")
     w._current_job_id = 7
     w._current_proc = _FakeProc()
     assert await w.pause(99) is False
@@ -150,7 +153,8 @@ async def test_run_ffmpeg_silences_libva_info_chatter(db, monkeypatch):
 # --- _process: cancelled vs real failure ---
 
 async def test_process_discards_cancelled_job_without_failing(db, monkeypatch):
-    w = _worker(db); _job(db, 7, "running")
+    w = _worker(db)
+    _job(db, 7, "running")
 
     async def cancelled(_job):
         raise exporter._ExportCancelled
@@ -162,7 +166,8 @@ async def test_process_discards_cancelled_job_without_failing(db, monkeypatch):
 
 
 async def test_process_marks_real_error_failed(db, monkeypatch):
-    w = _worker(db); _job(db, 8, "running")
+    w = _worker(db)
+    _job(db, 8, "running")
 
     async def boom(_job):
         raise ValueError("nope")
@@ -183,3 +188,76 @@ def test_reconcile_marks_paused_and_running_failed(db):
     assert _state(db, 1) == "failed"
     assert _state(db, 2) == "failed"
     assert _state(db, 3) == "done"
+
+
+# --- event-loop responsiveness ---
+
+async def test_pop_next_does_not_block_loop_while_db_busy(db):
+    """_pop_next runs a write transaction; with the DB lock held by a
+    worker thread it must wait off the loop, not freeze the server."""
+    import asyncio
+    import threading
+
+    w = _worker(db)
+    _job(db, 3, "queued")
+
+    held = threading.Event()
+    release = threading.Event()
+
+    def _hold_lock():
+        with db.write():
+            held.set()
+            release.wait(timeout=5.0)
+
+    t = threading.Thread(target=_hold_lock, daemon=True)
+    t.start()
+    assert held.wait(timeout=5.0)
+
+    ticks = 0
+
+    async def _ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    async def _call_pop():
+        res = w._pop_next()
+        if asyncio.iscoroutine(res):
+            res = await res
+        return res
+
+    tick_task = asyncio.create_task(_ticker())
+    pop_task = asyncio.create_task(_call_pop())
+    try:
+        await asyncio.sleep(0.3)
+        release.set()
+        job = await asyncio.wait_for(pop_task, timeout=5.0)
+    finally:
+        tick_task.cancel()
+        release.set()
+        t.join(timeout=5.0)
+
+    assert job is not None and job["id"] == 3
+    assert ticks >= 5, f"event loop starved while DB was busy ({ticks} ticks)"
+
+
+# --- shutdown ---
+
+async def test_stop_unfreezes_and_kills_inflight_child(db):
+    """A paused job's encoder is SIGSTOP'd; shutdown must SIGCONT it
+    before killing or the frozen ffmpeg outlives the server. A plain
+    running child must be killed too — stop() used to abandon it."""
+    w = _worker(db)
+    _job(db, 9, "paused")
+    w._current_job_id = 9
+    w._paused = True
+    w._resume.clear()
+    proc = _FakeProc()
+    w._current_proc = proc
+
+    await w.stop()
+
+    assert signal.SIGCONT in proc.signals, "paused child never resumed"
+    assert proc.killed, "in-flight child not killed on shutdown"
+    assert w._resume.is_set(), "paused job left parked forever"

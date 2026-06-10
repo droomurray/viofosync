@@ -19,7 +19,6 @@ from web.routers.exports import _resolve_default_encoder
 from web.services import exporter
 from web.services.exporter import ExportWorker
 
-
 # --- helpers ---
 
 def _state(prefs_encoder, available):
@@ -211,6 +210,7 @@ def test_qsv_probe_command_exercises_mfx(monkeypatch):
 
 async def test_finish_ok_schedules_export_preview(db, monkeypatch):
     import asyncio
+
     from web.services import export_preview
 
     calls = []
@@ -236,6 +236,7 @@ async def test_finish_ok_schedules_export_preview(db, monkeypatch):
 
 async def test_finish_failure_does_not_schedule_preview(db, monkeypatch):
     import asyncio
+
     from web.services import export_preview
 
     calls = []

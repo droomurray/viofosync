@@ -642,8 +642,14 @@ class SyncWorker:
             return False
         if self._provider.get().sync_ro_only:
             listing = list(_filter_ro_only(listing))
-        present = self._present_filenames()
-        summary = q.reconcile(self.db, listing, present)
+        # Both the archive walk and the reconcile transaction are
+        # blocking I/O (NAS stat calls, sqlite write lock) — keep
+        # them off the event loop or every request/WebSocket stalls
+        # behind a slow recordings volume.
+        present = await asyncio.to_thread(self._present_filenames)
+        summary = await asyncio.to_thread(
+            q.reconcile, self.db, listing, present
+        )
         await self.hub.broadcast({
             "type": "queue_reconciled",
             "summary": summary,

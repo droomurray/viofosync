@@ -18,7 +18,6 @@ import pytest
 
 from web.services import durations
 
-
 # --- ISO-BMFF box builders for deterministic fixtures ---
 
 def _box(btype: bytes, payload: bytes) -> bytes:

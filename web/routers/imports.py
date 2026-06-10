@@ -143,7 +143,10 @@ async def upload(request: Request) -> dict:
         return {"status": "already_present", "filename": name}
 
     # Evict to fit BEFORE writing bytes (size known from the header).
-    if not _retention.make_room_for(
+    # Off the loop: in quota mode this walks the whole archive (and
+    # may delete files) — seconds of blocking I/O on a NAS.
+    if not await asyncio.to_thread(
+        _retention.make_room_for,
         db, snap.recordings, size=item.size_bytes, before_ts=item.timestamp,
         disk_pct=snap.retention_disk_pct, quota_gb=snap.recordings_quota_gb,
         protect_ro=snap.retention_protect_ro,
@@ -159,7 +162,9 @@ async def upload(request: Request) -> dict:
     try:
         with open(tmp, "wb") as f:
             async for chunk in request.stream():
-                f.write(chunk)
+                # Recordings usually live on a NAS volume; a blocking
+                # write per chunk stalls every other request.
+                await asyncio.to_thread(f.write, chunk)
                 written += len(chunk)
     except Exception as e:  # pragma: no cover — client abort / disk error
         _silent_remove(tmp)

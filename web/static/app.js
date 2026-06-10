@@ -48,6 +48,17 @@ function cssVar(name) {
     .trim();
 }
 
+// Escape a string for interpolation into innerHTML templates —
+// element body OR attribute context (quotes included). Clip
+// filenames are external data: the Viofo regex allows any
+// characters in the camera segment, and geocode labels come from
+// Nominatim. Anything not produced by this file must pass through
+// here before reaching an HTML template.
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 // ---------- API helpers ----------
 
 async function api(path, opts = {}) {
@@ -634,7 +645,7 @@ function renderStopCard(stop, clips, idx) {
     el.innerHTML = `
       <span class="stop-icon" aria-hidden="true">⏸</span>
       <span>Stopped for <strong>${fmtDuration(stop.duration_s)}</strong>
-        at <span class="stop-label">${placeLabel}</span></span>
+        at <span class="stop-label">${escHtml(placeLabel)}</span></span>
       <span class="stop-when">${startT} – ${endT}</span>
     `;
     if (!stop.label) {
@@ -657,7 +668,7 @@ function renderStopCard(stop, clips, idx) {
       <span class="journey-times">${startT} – ${endT}</span>
       <span class="stop-icon" aria-hidden="true">⏸</span>
       <strong class="journey-title">
-        <span class="stop-label">${placeLabel}</span>
+        <span class="stop-label">${escHtml(placeLabel)}</span>
       </strong>
       <span class="journey-meta">
         ${fmtDuration(stop.duration_s)} ·
@@ -725,9 +736,9 @@ function renderJourneyCard(j, clips, idx, date) {
              title="Select all clips in this journey" />
       <span class="journey-times">${startT} – ${endT}</span>
       <strong class="journey-title">
-        <span class="start-label" data-lat="${j.start_lat}" data-lon="${j.start_lon}">${startLabel}</span>
+        <span class="start-label" data-lat="${j.start_lat}" data-lon="${j.start_lon}">${escHtml(startLabel)}</span>
         <span class="journey-arrow">→</span>
-        <span class="end-label" data-lat="${j.end_lat}" data-lon="${j.end_lon}">${endLabel}</span>
+        <span class="end-label" data-lat="${j.end_lat}" data-lon="${j.end_lon}">${escHtml(endLabel)}</span>
       </strong>
       <span class="journey-meta">
         ${fmtDuration(j.duration_s)} · ${distance} · ${clips.length} clip${clips.length === 1 ? "" : "s"}
@@ -931,7 +942,7 @@ function renderClipPair(pair) {
                data-clip-id="${c.id}" data-ts="${pair.timestamp}">
         <img src="/api/archive/clip/${c.id}/thumb" data-id="${c.id}"
              alt="" loading="lazy" decoding="async" />
-        <div class="label" title="${c.basename}">${c.basename}</div>
+        <div class="label" title="${escHtml(c.basename)}">${escHtml(c.basename)}</div>
       </div>` : `<div class="thumb empty"><div class="label">—</div></div>`;
   // Kind badge: shown for parking / read-only pairs only. Driving
   // pairs are the common case so we leave them un-badged to keep
@@ -1262,9 +1273,9 @@ const EXPORT_ICON_RESUME =
   '.217-2.779-1.643V5.653Z"/></svg>';
 
 function escapeExportText(s) {
-  const d = document.createElement("div");
-  d.textContent = String(s);
-  return d.innerHTML;
+  // Delegates to escHtml — the DOM-based version this replaced did
+  // not escape quotes, so it was unsafe in attribute contexts.
+  return escHtml(s);
 }
 
 // "15 Mar 14:30–15:02" (same day), "15 Mar – 17 Mar" (spans days),
@@ -1699,7 +1710,7 @@ function renderKindBadge(it) {
   const cam = it.kind_camera || it.camera || "";
   const evt = it.kind_event || "";
   const camLabel = cam === "F" ? "Front" : cam === "R" ? "Rear" : "?";
-  const parts = [`<span class="kind-badge kind-${cam}">${camLabel}</span>`];
+  const parts = [`<span class="kind-badge kind-${escHtml(cam)}">${camLabel}</span>`];
   if (evt === "parking") {
     parts.push(`<span class="kind-badge kind-parking">Parking</span>`);
   } else if (evt === "event") {
@@ -1915,12 +1926,12 @@ function renderHourBody(day, hh, items) {
     const checked = state.queueSelected.has(it.filename);
     const kind = renderKindBadge(it);
     tr.innerHTML = `
-      <td><input type="checkbox" class="qi-check" value="${it.filename}"
+      <td><input type="checkbox" class="qi-check" value="${escHtml(it.filename)}"
             ${isPending ? "" : "disabled"}
             ${checked ? "checked" : ""} /></td>
       <td>${ts}</td>
       <td>${kind}</td>
-      <td>${it.filename}</td>
+      <td>${escHtml(it.filename)}</td>
       <td>${size}</td>
       <td class="state-${it.state}">${it.state}</td>
       <td>${it.attempts}</td>
@@ -2431,7 +2442,7 @@ function updateCurrent(info) {
   const speed = info.speed ? `${fmtBytes(info.speed)}/s` : "";
   el.innerHTML = `
     <div class="current-header">
-      <strong>${info.filename}</strong>
+      <strong>${escHtml(info.filename)}</strong>
       <span class="spacer"></span>
       <button type="button" class="cancel-btn"
               title="Skip this file" aria-label="Skip this file">&times;</button>

@@ -128,7 +128,7 @@ async def _publish_entity_attrs(client, cfg, entity, hub, db, snap,
     if entity.attrs_fn is None:
         return
     try:
-        attrs = entity.attrs_fn(hub, db, snap)
+        attrs = await asyncio.to_thread(entity.attrs_fn, hub, db, snap)
     except Exception:
         log.exception("mqtt: attrs_fn raised for %s", entity.object_id)
         return
@@ -359,7 +359,11 @@ class MqttService:
             if entity.state_fn is None:
                 continue
             try:
-                value = entity.state_fn(self._hub, self._db, snap)
+                # state_fns can block (disk_used walks the archive in
+                # quota mode) — keep them off the event loop.
+                value = await asyncio.to_thread(
+                    entity.state_fn, self._hub, self._db, snap
+                )
             except Exception:
                 log.exception("mqtt: state_fn raised for %s", entity.object_id)
                 continue
@@ -439,7 +443,9 @@ class MqttService:
                     if entity.state_fn is None:
                         continue
                     try:
-                        value = entity.state_fn(self._hub, self._db, snap)
+                        value = await asyncio.to_thread(
+                            entity.state_fn, self._hub, self._db, snap
+                        )
                     except Exception:
                         log.exception("mqtt: state_fn raised for %s",
                                        entity.object_id)
@@ -577,7 +583,11 @@ class MqttService:
                 if entity.object_id not in ("disk_used", "dashcam"):
                     continue
                 try:
-                    value = entity.state_fn(self._hub, self._db, snap)
+                    # disk_used walks the whole archive in quota mode —
+                    # on the loop this froze the server once a minute.
+                    value = await asyncio.to_thread(
+                        entity.state_fn, self._hub, self._db, snap
+                    )
                 except Exception:
                     log.exception("mqtt: state_fn raised for %s",
                                    entity.object_id)
