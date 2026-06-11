@@ -237,6 +237,7 @@ def logged_in_client(tmp_config_dir, tmp_recordings_dir, monkeypatch):
 
 
 def test_post_timeline_export_creates_job(logged_in_client, monkeypatch):
+    monkeypatch.setattr("web.services.exporter.ffmpeg_available", lambda: True)
     logged_in_client.app.state.export_encoders = {"software": True}
     csrf = logged_in_client.get("/api/auth/csrf").json()["csrf"]
     r = logged_in_client.post("/api/exports", json={
@@ -251,7 +252,8 @@ def test_post_timeline_export_creates_job(logged_in_client, monkeypatch):
     assert "job_id" in r.json()
 
 
-def test_post_timeline_requires_segments(logged_in_client):
+def test_post_timeline_requires_segments(logged_in_client, monkeypatch):
+    monkeypatch.setattr("web.services.exporter.ffmpeg_available", lambda: True)
     logged_in_client.app.state.export_encoders = {"software": True}
     csrf = logged_in_client.get("/api/auth/csrf").json()["csrf"]
     r = logged_in_client.post("/api/exports", json={
