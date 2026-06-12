@@ -92,6 +92,33 @@ def test_timeline_day_mode_channels_clips_bounds(logged_in_client):
     assert body["gps"] is None
 
 
+def test_timeline_third_camera_channels(logged_in_client):
+    """Tele and interior clips each get their own channel, in
+    CHANNEL_ORDER after rear. A real device has only one of the
+    two, but the endpoint must order any mix it finds — e.g. an
+    archive that spans both a telephoto and an interior setup."""
+    app = logged_in_client.app
+    _insert_clip(app, 1, 1_717_312_440, "F", 60.0)
+    _insert_clip(app, 2, 1_717_312_440, "R", 60.0)
+    _insert_clip(app, 3, 1_717_312_440, "T", 60.0)
+    _insert_clip(app, 4, 1_717_312_440, "I", 60.0)
+
+    r = logged_in_client.get("/api/archive/timeline?date=2026-06-02")
+    assert r.status_code == 200
+    body = r.json()
+    assert [ch["key"] for ch in body["channels"]] == [
+        "front", "rear", "tele", "interior",
+    ]
+    labels = {ch["key"]: ch["label"] for ch in body["channels"]}
+    assert labels["tele"] == "Tele"
+    assert labels["interior"] == "Interior"
+    by_channel = {}
+    for c in body["clips"]:
+        by_channel.setdefault(c["channel"], []).append(c)
+    assert len(by_channel["tele"]) == 1
+    assert len(by_channel["interior"]) == 1
+
+
 def test_timeline_journey_mode_windows_clips(logged_in_client, monkeypatch):
     app = logged_in_client.app
     _insert_clip(app, 1, 1_717_312_440, "F", 60.0)
