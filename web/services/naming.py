@@ -1,18 +1,23 @@
-"""Derive sensible download filenames for joined/PiP exports.
+"""Camera facade for the web layer + export filename derivation.
 
-Pure functions — no DB or HTTP. ``build_basename`` turns a set of
-clips plus a camera label into a stem like
-``2024-03-15_1430-1502_front_4clips`` (date + time-range + camera
-+ clip count). ``export_download_name`` maps an export job type to
-a label and appends ``.mp4``, falling back to the legacy
-``viofosync_export_{id}.mp4`` when the source clips are gone
-(retention) or the type is unknown.
+Pure functions — no DB or HTTP. Two roles:
 
-(Original, un-joined clips are downloaded individually and keep
-their dashcam basenames — they don't go through this module.)
+1. The web app's view of the camera registry
+   (viofosync_lib/cameras.py): re-exports plus the derived
+   per-camera export job types (``join_<channel>``, ``pip``/
+   ``pip_<channel>``) with their letter/partner/main tables, and
+   the timeline channel order/labels.
 
-Timestamps are unix seconds formatted in local time, matching how
-the archive UI renders clip times (web/routers/archive.py).
+2. Download filenames for joined/PiP exports: ``build_basename``
+   turns a set of clips plus a camera label into a stem like
+   ``2024-03-15_1430-1502_front_4clips``; ``export_download_name``
+   maps an export job type to a label and appends ``.mp4``,
+   falling back to the legacy ``viofosync_export_{id}.mp4`` when
+   the source clips are gone (retention) or the type is unknown.
+   (Original, un-joined clips keep their dashcam basenames — they
+   don't go through this module.) Timestamps are unix seconds
+   formatted in local time, matching how the archive UI renders
+   clip times (web/routers/archive.py).
 """
 from __future__ import annotations
 
@@ -20,16 +25,45 @@ import datetime as _dt
 import json as _json
 from typing import List
 
+from viofosync_lib.cameras import (  # noqa: F401 — re-exported
+    CAMERAS,
+    channel_of,
+    pair_slot_of,
+)
+
+# --- Per-camera export job types, derived from the registry ----------
+#
+# Join types exist for every camera (``join_front`` … ``join_interior``).
+# PiP types pair the front camera with one partner: the legacy ``pip``
+# is front-main + rear inset; ``pip_<channel>`` makes the partner
+# fullscreen with the front inset. Adding a camera in
+# viofosync_lib/cameras.py extends all of these automatically.
+
+JOIN_LETTER_FOR_TYPE = {
+    f"join_{c.channel}": c.letter for c in CAMERAS
+}
+
+_PARTNERS = [c.channel for c in CAMERAS if c.channel != "front"]
+
+# job type -> the non-front slot it pairs with
+PIP_PARTNER_FOR_TYPE = {"pip": "rear"} | {
+    f"pip_{ch}": ch for ch in _PARTNERS
+}
+
+# job type -> which side is fullscreen
+PIP_MAIN_FOR_TYPE = {"pip": "front"} | {
+    f"pip_{ch}": ch for ch in _PARTNERS
+}
+
+# Everything enqueue()/the route accept, except "timeline" which has
+# its own entry point.
+EXPORT_JOB_TYPES = (*JOIN_LETTER_FOR_TYPE, *PIP_PARTNER_FOR_TYPE)
+
 # Export job type -> camera label used in the filename.
 LABEL_FOR_TYPE = {
-    "join_front": "front",
-    "join_rear": "rear",
-    "join_tele": "tele",
-    "join_interior": "interior",
-    "pip": "pip-front",               # front-main PiP
-    "pip_rear": "pip-rear",           # rear-main PiP
-    "pip_tele": "pip-tele",           # tele-main + front inset
-    "pip_interior": "pip-interior",   # interior-main + front inset
+    f"join_{c.channel}": c.channel for c in CAMERAS
+} | {"pip": "pip-front"} | {
+    f"pip_{ch}": f"pip-{ch}" for ch in _PARTNERS
 }
 
 
@@ -94,31 +128,10 @@ def export_download_name(
 
 # --- Timeline camera channels -------------------------------------------
 
-# The lens is the trailing letter of a clip's ``camera`` code:
-# F / PF (parking) / EF (event) -> front; R / PR -> rear;
-# T -> telephoto; I -> interior. 3-channel models pair F+R with
-# either T or I. Anything else falls back to "other" so an
-# unexpected code still gets its own track rather than vanishing.
-_CHANNEL_FOR_LETTER = {
-    "F": "front",
-    "R": "rear",
-    "T": "tele",
-    "I": "interior",
-}
-
-# Stable display order for channel tracks, and human labels.
-CHANNEL_ORDER = ["front", "rear", "tele", "interior", "other"]
-CHANNEL_LABELS = {
-    "front": "Front",
-    "rear": "Rear",
-    "tele": "Tele",
-    "interior": "Interior",
+# Channel keys/labels come straight from the registry; "other" is the
+# fallback channel_of() uses for unrecognised codes. channel_of itself
+# lives in viofosync_lib.cameras and is re-exported above.
+CHANNEL_ORDER = [c.channel for c in CAMERAS] + ["other"]
+CHANNEL_LABELS = {c.channel: c.label for c in CAMERAS} | {
     "other": "Other",
 }
-
-
-def channel_of(camera: str | None) -> str:
-    """Map a clip's ``camera`` code to a timeline channel key."""
-    if not camera:
-        return "other"
-    return _CHANNEL_FOR_LETTER.get(camera[-1].upper(), "other")
