@@ -4,6 +4,10 @@
 
 Self-hosted web app for syncing, browsing, and exporting recordings from a Viofo dashcam (tested with the A229 Pro) over Wi-Fi. Runs as a single Docker container on a NAS or any always-on host on the same network as the dashcam.
 
+> **This is a fork of [RobXYZ/viofosync](https://github.com/RobXYZ/viofosync).** It adds one feature on top of the upstream project: a **Camera** tab to read and adjust the dashcam's own settings — parking mode, watermarks, HDR, LEDs, GPS, beeps, time/date, loop length and more — over Wi-Fi, with destructive actions (format, factory reset, firmware, delete, reboot) hard-blocked. See **[Camera control](#camera-control)** below; proposed upstream as [RobXYZ/viofosync#21](https://github.com/RobXYZ/viofosync/pull/21).
+>
+> **For everything else** — Wi-Fi sync, archive browser, journey maps, the video editor, exports, storage management, and Home Assistant — this fork tracks upstream unchanged. The canonical project, issues, and Docker releases live at **[RobXYZ/viofosync](https://github.com/RobXYZ/viofosync)**.
+
 > **v2 is a full rewrite.** v1 was a cron-driven CLI based on [BlackVueSync](https://github.com/acolomba/BlackVueSync). v2 uses the same dashcam protocol but ships a web UI, journey-detected GPS maps, a timeline video editor, ffmpeg exports, JSON-backed settings, a first-run setup wizard, and a UI-driven download manager. The v1 cron CLI is preserved on the `main` branch.
 
 ## Features
