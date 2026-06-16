@@ -164,6 +164,8 @@ For "prioritize the last N hours", publish to `{node_id}/cmd/prioritize_recent` 
 
 The **Camera** tab reads the dashcam's current settings and lets you change them over Wi-Fi — parking mode, watermarks, HDR, LEDs, GPS, beeps, time/date, loop length, bitrate, and so on. On/off settings are toggles; multi-choice settings are drop-downs populated with the camera's own option labels. Each change is validated, sent, and read back to confirm it applied.
 
+![The Camera tab](screenshots/camera_control.webp)
+
 This drives the undocumented Novatek **netapp** HTTP interface (`http://<cam>/?custom=1&cmd=<id>&par=<value>`). Because that protocol has no schema, the option labels and value enumerations come from a derived per-model command map (`viofosync_lib/data/command_map.json`); see [Command map data](#command-map-data).
 
 **Safety model.** On this protocol a bare command is *not* always a harmless read — some ids are destructive actions. The control layer:
