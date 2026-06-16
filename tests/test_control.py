@@ -11,7 +11,6 @@ import pytest
 
 from viofosync_lib import _control as control
 
-
 # --------------------------------------------------------------------------- #
 # Pure data layer (uses the shipped command_map.json; no camera)
 # --------------------------------------------------------------------------- #
